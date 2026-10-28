@@ -39,6 +39,7 @@ namespace mt
 
         ISynthObject::addVoices( voices );
         slice.setReSampleRate( getSampleRate() );
+        accentSlice.setReSampleRate( getSampleRate() );
     }
 
     Metronome::~Metronome()
@@ -50,9 +51,20 @@ namespace mt
 
     void Metronome::setSource( juce::String& File )
     {
-        auto path  = getAppDirs( MTAssets ).getChildFile( File );
+        auto       path = getAppDirs( MTAssets ).getChildFile( File );
+        juce::File accent;
+        if( !path.existsAsFile() )
+        {
+            // The factory click sounds (KickSettings MStyle0..7) are not part of the public
+            // release. Fall back to a click set under assets/StarterKit/Metronome (the KickEmulator
+            // installs its synthesised CC0 Starter Kit there), which has a separate accent for the
+            // bar. With the factory click present nothing changes.
+            path   = getAppDirs( MTAssets ).getChildFile( "StarterKit/Metronome/Click.wav" );
+            accent = path.getSiblingFile( "Click Accent.wav" );
+        }
         auto sound = getAudioSoundCache().getOrLoadMetronomeSound( path.getFullPathName() );
         slice.setSource( sound );
+        accentSlice.setSource( accent.existsAsFile() ? getAudioSoundCache().getOrLoadMetronomeSound( accent.getFullPathName() ) : nullptr );
     }
 
     void Metronome::noteOn( int Note, int Velocity )
@@ -60,7 +72,8 @@ namespace mt
         noteOff( Note );
         if( auto voice = getFreeVoice( Note, 1 ) )
         {
-            voice->setSlice( &slice );
+            // Note 0 is the bar (MTMetronome::triggerBar), note 1 the beat.
+            voice->setSlice( ( 0 == Note && accentSlice.source ) ? &accentSlice : &slice );
             voice->noteOn( Note, Velocity );
             addVoiceForPlayback( voice );
         }
