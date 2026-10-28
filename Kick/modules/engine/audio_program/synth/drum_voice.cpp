@@ -162,8 +162,6 @@ namespace mt
             update(); // Update parameters...
 
             const auto masterPitchRatio = master.pitchRatio.load();
-            const auto masterGainL      = master.gainL.load();
-            const auto masterGainR      = master.gainR.load();
             const auto numSamples       = Buffer.getNumSamples();
 
             auto out0 = tempBuffer.getWritePointer( 0 );
@@ -179,7 +177,7 @@ namespace mt
                 auto pitchAdsr = pitchEnv();
 
                 auto aMod   = rGain * ampAdsr * ( ( 1. - lfoToAmp ) + ( lfoToAmp * lfoOut ) ); // Amplitude modulation factor.
-                auto panMod = ( lfoToPan * lfoOut ) + ( gain.getTargetValue() * ampToPan ); // Pan modulation factor.
+                auto panMod = notePan + ( lfoToPan * lfoOut ) + ( gain.getTargetValue() * ampToPan ); // Pad pan + pan modulation.
                 auto pMod   = pitchAdsr * masterPitchRatio * ( 1.0 - ( lfoToPitch * lfoOut ) ); // Pitch modulation factor.
                 auto fMod   = filtAdsr * pEnv.filter.depth() * ( ( lfoToFilter * lfoOut ) + ( lfoToPitch * lfoOut ) ); // Filter cutoff frequency modulation.
 
@@ -194,9 +192,11 @@ namespace mt
                 *out1++ = panner.getRight() * sample.getSample( 1, 0 );
             }
 
-            // Apply Master gain and pan, and add to the Buffer.
-            Buffer.addFrom( 0, 0, tempBuffer, 0, 0, numSamples, masterGainL );
-            Buffer.addFrom( 1, 0, tempBuffer, 1, 0, numSamples, masterGainR );
+            // Add to the Buffer. The program's master gain and pan are applied once, to the sum of
+            // all voices, in ISynthObject::postProcess (as for every other program type); applying
+            // them here as well counted the pan law twice (-6 dB in the centre instead of -3 dB).
+            Buffer.addFrom( 0, 0, tempBuffer, 0, 0, numSamples );
+            Buffer.addFrom( 1, 0, tempBuffer, 1, 0, numSamples );
 
             if( hasFinished() )
                 makeFree();

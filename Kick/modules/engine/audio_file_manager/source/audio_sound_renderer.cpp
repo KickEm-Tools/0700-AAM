@@ -102,7 +102,16 @@ namespace mt
         advanceOne( PitchRatio );
 
         const auto muted = finished.load() || isMuted() || slice->isMuted();
-        return muted ? mutedSample : interpolateSample();
+        if( muted )
+        {
+            // Every voice shares this one silent sample and DrumVoice filters the returned sample
+            // in place, so it must be zeroed each time: otherwise the filter's own output was fed
+            // back as the next input after a sample ended (a -32 dBFS 900 Hz burst at the end of
+            // a drum hit, measured on the desktop build).
+            mutedSample.clear();
+            return mutedSample;
+        }
+        return interpolateSample();
     }
 
     void ASliceRenderer::getNextBlock( juce::AudioSampleBuffer& Block, double PitchRatio )
