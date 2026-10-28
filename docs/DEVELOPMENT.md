@@ -1,7 +1,8 @@
 # Building Kick
 
 How to build the Kick application from this repository on macOS, a Linux desktop and Linux arm64,
-and what had to change to make the public release build at all.
+and what had to change to make the public release build at all. Section 8 lists the hooks for
+testing the app without a unit, all of them inert on the device.
 
 ## 1. What gets built
 
@@ -112,6 +113,12 @@ The configure copies `assets/`, `templates/` and `demos/` into the build directo
   binary.
 
 Logs go to stdout. A good start prints `AudioDevice: using '<device>' at 48000 Hz, ...`.
+Loading a project prints `Project: loaded <path>`.
+
+Screens that drive the unit's hardware (Wi-Fi, Ethernet, CV, firmware update, the resource
+meters) say "not available on this system" on a computer, and the app does not touch the
+computer's network or clock. For scripted checks, the audio probe and the other test hooks, see
+section 8.
 
 Without the control-surface microcontroller there are no pads, buttons or knobs. On macOS (and
 Windows) the keyboard drives them instead (`Kick/modules/contracts/utils/keyboard`). On Linux the
@@ -239,3 +246,108 @@ and JUCE versions and the JUCE patch.
 - **JUCE is downloaded again on every configure**: keep the default cache
   (`.3rdPartySourceCache/`) or pass the same `-DCPM_SOURCE_CACHE=<dir>` every time.
 - **"#pragma message: juce_serialport is a stub" on Linux**: expected, see 5.2.
+
+## 8. Extension points for testing without a unit
+
+A few small hooks let a desktop build of Kick, or a test harness such as an emulator, run and
+check the app without the unit's hardware. **On a unit they do nothing**: each one is either off
+unless an environment variable is set, or it only acts when a piece of hardware is missing, and a
+unit has all of it. None of them contains emulator code.
+
+### 8.1 Environment variables
+
+All of them are unset on a unit (`ktkick.service` sets none of them).
+
+| Variable | What it does | Where | On the unit (unset) |
+|---|---|---|---|
+| `KICK_TEST_CONTROL=<file>` | Starts the test-control module (8.3): the app polls `<file>` for commands that touch the screen, list or render it, and read the transport | `modules/test_control`, created by `apps/kick/Main.cpp` | Not created: nothing is polled or logged, focus is JUCE's alone |
+| `KICK_AUDIO_PROBE=<file.wav>` | `mt::AudioDevice` writes the engine's master output to that WAV (32-bit float) and logs `AudioProbe: t=<n>s peak=<x>dBFS rms=<y>dBFS` once per second of audio (`-120.0dBFS` is silence). The audio thread only copies into a lock-free FIFO; a background thread writes | `AudIO/AudIO_juce/source/mt_AudioDeviceProbe.*` | No probe object; the audio callback is unchanged |
+| `KICK_AUDIO_INPUT=silence\|device\|tone[:hz]\|pulse[:ms]\|<file>` | Replaces the device input on every channel with digital silence, a -12 dBFS sine (1 kHz default), 50 ms 1 kHz bursts at -6 dBFS every 500 ms (or `<ms>`), or a looped audio file; `device` (or unset) keeps the real input. Logged as `TestInput: ...` | same | The real input |
+| `KICK_LOG_NOTES=1` | The sequencer logs every note it plays: `Note: track '<name>' tick <t> pos <p> note <n> velocity <v> id <id>`. Read once | `engine/audio_engine/engine/mt_audio_track.cpp` | Nothing logged |
+| `KICK_HARDWARE=none\|<list>` | Overrides the hardware probe (8.2): `none` makes every feature unavailable, `wifi,clock` makes exactly those available, on any platform. Read once and logged once (`Hardware: KICK_HARDWARE=...`) | `modules/hardware/source/kick_HardwareProbe.*` | The probe decides, and finds everything |
+
+Paths are relative to the working directory. One log line is always written, on every platform:
+`Project: loaded <path>` when a project is loaded (`MTAudioManager::loadProject`).
+
+### 8.2 The hardware probe
+
+Some screens and helpers exist only to drive the unit's hardware or its Linux: they run `ifconfig`,
+`killall -9 wpa_supplicant`, `timedatectl`, open `/dev/i2c-3`, or scan for `.swu` images.
+`mt::hw::isAvailable( Feature )` says whether this system has the feature:
+
+| Feature | Available when (Linux; never on other platforms) | Consulted by | When unavailable |
+|---|---|---|---|
+| `wifi` | `/sys/class/net/wlan0` exists | `WifiManager::executeCommand`, `scanWiFiNetworks`; PREFS > WiFi | commands and scan are not run (logged); the tab is covered |
+| `ethernet` | `/sys/class/net/eth0` exists | `HwPref::startDhcp`, `stopDhcp`, `ethernetEnable`, `setIP`; PREFS > Ethernet | commands are not run (logged); the tab is covered |
+| `cv` | `/dev/i2c-3` exists | PREFS > CV (and the calibration screen behind it) | the tab is covered |
+| `update` | `swupdate` is on `PATH` | Firmware Update (`SWUpdateView`) | no image scan, no USB gadget; the list is covered |
+| `clock` | always | `HwPref::setDate`, `setTime`, `setTimeZone` | the clock is not set (logged) |
+| `resources` | always | the CPU / RAM / storage meters (`KSystemResources`) | no 1 Hz refresh; the meters are covered |
+
+It is checked on every call, so an interface that comes up after the app (`wlan0` once its
+firmware has loaded) is picked up the next time the screen is shown. A command that is skipped
+logs `FeatureUnavailable: <feature>: command not run: <command>`.
+
+A covered screen shows `ui::FeatureUnavailable` (`kick_ui_controls/source/kick_FeatureUnavailable.h`):
+`<feature>: not available on this system` with a line on what the unit does there. It swallows
+touches, so the controls underneath cannot be used, and logs `FeatureUnavailable: <feature> shown`
+/ `hidden`. It is created only while the feature is unavailable, so on a unit it never exists.
+
+On macOS every feature is unavailable. On a Linux desktop the probe usually finds `eth0` (and
+maybe `wlan0`): set `KICK_HARDWARE=none` so the app never reconfigures your computer's network or
+clock. In a VM that should behave like a unit, leave it unset.
+
+### 8.3 The test-control module
+
+`modules/test_control` is a generic, file-driven test channel for the screen, for scripted
+checks. With `KICK_TEST_CONTROL=<file>` set the app logs `TestControl: listening on <file>`, then
+reads lines appended to `<file>` after start-up (it creates the file if needed) and runs one at a
+time on the message thread:
+
+```
+<seq> <command> [args]          e.g.  7 click "Firmware Update"
+```
+
+When a command is done the app logs `TestControl: ok <seq>`, or `TestControl: error <seq>
+<reason>`. A client appends a line and waits for its acknowledgement; a blocked message thread
+shows up as a timeout.
+
+| Command | What it does |
+|---|---|
+| `tap X Y` | Touches pixel (X, Y) of the 1024x600 screen (the main window) |
+| `click NAME` | Touches the centre of the showing component whose title (or name) is NAME, popups first: Preferences tabs `Info`, `Hardware`, `CV`, `Ethernet`, `WiFi`, buttons such as `Settings`, `Resources`, `Firmware Update` |
+| `clickat NAME FX FY` | Touches NAME at fraction (FX, FY) of its size, for controls with untitled parts |
+| `list [FILTER]` | Logs `TestControl: item <type> <name> <x y w h> screen\|popup` for every showing, titled component (bounds in screen pixels, usable with `tap`) |
+| `shot OUT.png` | Renders the main window, popups and bubbles included, to `OUT.png` at 1024x600, in-process (no window server needed); any other desktop window to `OUT-<n>.png` |
+| `windows` | Logs the main window, the overlays on it (modal popups, bubbles) and any other desktop window, each with its bounds on the screen and on the display |
+| `status` | Logs `TestControl: status <state> bbt=<bar>:<beat>:<tick> bpm=<n> clock=<tempo> rec=n/a metronome=on\|off` (BAR:BEAT:TICK 1-based as on screen; the record mode needs the note-recording engine and prints `n/a` until then) |
+| `echo TEXT` | Logs `TestControl: echo TEXT`, a marker for scripts |
+
+How it works, and what it does not do:
+
+- **Touches** are delivered to the component under the point directly: buttons get
+  `triggerClick()`, anything else `mouseDown` and, 80 ms later, `mouseUp`. They do not go through
+  the window's `ComponentPeer`, whose hit-test asks macOS whether the window is the topmost one
+  there, which is false while the screen is locked or the window is covered. A touch on a
+  component behind a modal dialog is refused (`blocked by modal component ...`). Mouse listeners
+  on parent components do not hear these touches.
+- **Focus.** A touched control gets the jog wheel, + / -, PUSH and the slider through JUCE
+  keyboard focus, which JUCE grants only while the window is the key window. The module records
+  the control a touch focused (`testcontrol::FocusFallback`), and `ui::getComponentInFocus()` uses
+  it while JUCE has no focused component. The fallback is active only while the module runs.
+- **Panel input** (keys, pads, encoders, slider) is not part of it. It comes over the serial
+  port, from the unit's control surface or from an emulator playing its part.
+
+### 8.4 Popups and lists on a desktop
+
+Two generic changes make the screen behave on a desktop as on the unit, with no switch:
+
+- Full-screen popups (dialogs, the loading spinner) and notification bubbles are added to the
+  app's main window (`ui::overlayRoot()`, `kick_ui_controls/source/kick_ControlBase.h`, set by
+  `apps/kick/Main.cpp`), not placed on the desktop at display coordinates. On the unit the window
+  is the display, so they appear where they always did; on a desktop they stay inside the Kick
+  window instead of covering the top-left of the computer's display. The blurred backdrop is a
+  snapshot of that window.
+- List rows (`KickTableView`) are hit-tested in the list's own coordinates, and the Q-Link row
+  maths measures the list from the top-level component rather than the desktop. On the unit both
+  give the same numbers.
