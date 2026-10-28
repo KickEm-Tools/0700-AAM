@@ -90,6 +90,15 @@ jobs:
           jobs=$( (nproc || sysctl -n hw.ncpu) 2>/dev/null )
           cmake --build Kick/build --target Kick --parallel "$jobs"
 
+      # The control-surface protocol round trip and juce_serialport against a pty
+      # (docs/DEVELOPMENT.md, section 8).
+      - name: Link tests
+        shell: bash
+        run: |
+          jobs=$( (nproc || sysctl -n hw.ncpu) 2>/dev/null )
+          cmake --build Kick/build --target kick_protocol_roundtrip kick_serialport_pty_test --parallel "$jobs"
+          cd Kick/build && ctest --output-on-failure -R '^kick_'
+
       - name: Check the binary
         shell: bash
         run: |
