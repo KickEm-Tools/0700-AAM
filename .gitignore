@@ -1,0 +1,3 @@
+# CPM download cache. Kick/CMakeLists.txt defaults CPM_SOURCE_CACHE to this
+# directory (one level above Kick/).
+.3rdPartySourceCache/
