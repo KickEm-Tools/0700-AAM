@@ -114,6 +114,13 @@ endif()
 add_subdirectory(modules)
 add_subdirectory(apps)
 
+# Console tests for the control-surface link (docs/DEVELOPMENT.md, section 8).
+option( KICK_LINK_TESTS "Build the control-surface protocol and serial port tests" ON )
+if( KICK_LINK_TESTS )
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
 ##
 ## Add CPack support
 ##
