@@ -175,6 +175,10 @@ public:
         // Visibility...
         w->setVisible( true );
 
+        // Full-screen popups, the loading spinner and notification bubbles go on this window
+        // (kick_ui_controls/source/kick_ControlBase.h). On the unit it covers the display.
+        ui::overlayRoot() = w.get();
+
 #if PERFETTO
         MelatoninPerfetto::get().beginSession();
 #endif
@@ -186,6 +190,7 @@ public:
         MelatoninPerfetto::get().endSession();
 #endif
         // Add your application's shutdown code here ...
+        ui::overlayRoot() = nullptr;
         w = nullptr;
         adapter = nullptr;
     }
