@@ -30,10 +30,13 @@ namespace contracts
 {
     std::atomic<bool> shiftBtnState{ false };
     std::atomic<bool> halfLevelState{ false };
+    std::atomic<bool> fullLevelState{ false };
 
     bool DclContractsHelper::isShiftPressed() { return shiftBtnState.load(); }
     void DclContractsHelper::setHalfLevel( bool state ) { halfLevelState.store( state ); }
     bool DclContractsHelper::isHalfLevel() { return halfLevelState.load(); }
+    void DclContractsHelper::setFullLevel( bool state ) { fullLevelState.store( state ); }
+    bool DclContractsHelper::isFullLevel() { return fullLevelState.load(); }
     bool DclContractsHelper::isButtonMessage( const CPktMgr::HWMsg_t& hwMsg ) { return ( hwMsg.pktType == CPktMgr::enumPacketType::EN_PKT_TYPE_BUTTON ) && ( hwMsg.pktCmd == contracts::DeviceControlContracts::BtnCmd::EN_BTN_STATUS ); }
     bool DclContractsHelper::isPadButtonMessage( const CPktMgr::HWMsg_t& hwMsg ) { return ( hwMsg.pktType == CPktMgr::enumPacketType::EN_PKT_TYPE_PAD ) && ( hwMsg.pktCmd == contracts::DeviceControlContracts::PadCmd::EN_PAD_STATE ); }
     bool DclContractsHelper::isKnobMessage( const CPktMgr::HWMsg_t& hwMsg ) { return ( hwMsg.pktType == CPktMgr::enumPacketType::EN_PKT_TYPE_KNOBS ); }
