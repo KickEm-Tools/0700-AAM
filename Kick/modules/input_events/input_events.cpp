@@ -20,7 +20,6 @@
 
 namespace Controls
 {
-    std::atomic<bool> shiftBtnState{ false };
     std::atomic<bool> halfLevelState{ false };
 
     ///
@@ -248,7 +247,7 @@ namespace Controls
                         {
                             DBG( "Button state = " << contracts::DclContractsHelper::getButtonState( rxMsg ) );
                             if( ( contracts::DeviceControlContracts::EN_SHIFT == contracts::DclContractsHelper::getButtonCode( rxMsg ) ) )
-                                Controls::shiftBtnState.store( contracts::DclContractsHelper::getButtonState( rxMsg ) );
+                                contracts::DclContractsHelper::setShiftPressed( contracts::DclContractsHelper::getButtonState( rxMsg ) != contracts::DeviceControlContracts::BTN_RELEASED );
                         }
                         // juce::String log;
                         // log += "Cmd:" + juce::String( rxMsg.pktCmd ) + " " + "type:" + juce::String( rxMsg.pktType );
