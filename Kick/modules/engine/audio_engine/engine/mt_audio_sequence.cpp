@@ -635,8 +635,18 @@ namespace mt
 
     void MTSequence::play()
     {
-        // Setup starting tick.
-        sequencePlayhead.bnb.bar = isLooping.get() ? juce::jmax<int>( 0, loopStart.get() - 1 ) : 0;
+        // The clock restarts from tick 0 below (start( true )); so must the tick difference,
+        // otherwise a second play() after a pause sees Ticks < prevTicks and runs the bar counter away.
+        getMidiClock().stop();
+        prevTicks.store( 0 );
+        startPending.store( true );
+
+        // Setup starting tick: the start of the bar. Beat and tick kept the paused position, so
+        // PLAY START after STOP counted bars and beats from that offset (the notes, which the
+        // tracks count from tick 0, were right; the BAR:BEAT:TICK display and metronome were not).
+        sequencePlayhead.bnb.bar  = isLooping.get() ? juce::jmax<int>( 0, loopStart.get() - 1 ) : 0;
+        sequencePlayhead.bnb.beat = 0;
+        sequencePlayhead.bnb.tick = 0;
 
         // Initialize
         initializeTickDataFromTempoSettings( getSequenceTempoSettings( sequencePlayhead.bnb.bar ) );
@@ -704,8 +714,23 @@ namespace mt
     void MTSequence::onTick( unsigned int Ticks )
     {
         //double start = juce::Time::getMillisecondCounterHiRes();
-        auto diff = Ticks - prevTicks;
+        // A tick of the previous clock run that arrives after play(): ignore it.
+        if( startPending.load() && Ticks > ticksPerBeat.load() )
+            return;
+        // A clock restarted under us (Ticks < prevTicks) counts from zero, not from -prevTicks.
+        auto diff = ( Ticks >= prevTicks.load() ) ? ( Ticks - prevTicks.load() ) : Ticks;
         prevTicks.store( Ticks );
+
+        // First tick after play() from a bar line: the clock never reports tick 0, so the bar and
+        // beat signals of the starting position (metronome accent on bar 1) would be lost.
+        if( startPending.exchange( false ) && ( 0 == barPos.load() ) )
+        {
+            signals::onBar( sequencePlayhead.bnb.bar );
+            signals::on1_2();
+            signals::on1_4();
+            signals::on1_8();
+            signals::on1_16();
+        }
 
         tickPos += diff;
         beatPos += diff;
@@ -718,14 +743,16 @@ namespace mt
 
         sequencePlayhead.bnb.tick += diff;
 
-        if( barPos > ticksPerBar )
+        // ">=": a bar (beat, 1/n) starts at the tick that completes the previous one; ">" fired
+        // every signal one tick (5.2 ms at 120 BPM) after the notes on the same position.
+        if( barPos >= ticksPerBar )
         {
             barPos -= ticksPerBar; // Clear bar counter
             beatPos = 0; // Also clear beat counter
             onBar();
         }
 
-        if( beatPos > ticksPerBeat )
+        if( beatPos >= ticksPerBeat )
         {
             beatPos -= ticksPerBeat; // Clear beat counter
             onBeat();
@@ -740,22 +767,22 @@ namespace mt
                 it->onTick( Ticks );
         }
 
-        if( pos1_2 > ticksPer1_2 )
+        if( pos1_2 >= ticksPer1_2 )
         {
             pos1_2 -= ticksPer1_2;
             signals::on1_2();
         }
-        if( pos1_4 > ticksPer1_4 )
+        if( pos1_4 >= ticksPer1_4 )
         {
             pos1_4 -= ticksPer1_4;
             signals::on1_4();
         }
-        if( pos1_8 > ticksPer1_8 )
+        if( pos1_8 >= ticksPer1_8 )
         {
             pos1_8 -= ticksPer1_8;
             signals::on1_8();
         }
-        if( pos1_16 > ticksPer1_16 )
+        if( pos1_16 >= ticksPer1_16 )
         {
             pos1_16 -= ticksPer1_16;
             signals::on1_16();

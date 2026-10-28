@@ -12,6 +12,7 @@
 
 //dialogs
 #include "dialogs/kick_AppMainMode.cpp"
+#include "dialogs/kick_PadModifiers.cpp"
 #include "dialogs/kick_AppHome.cpp"
 #include "dialogs/kick_AppMenuOptions.cpp"
 #include "dialogs/kick_AppAssignSample.cpp"
@@ -66,6 +67,7 @@
 #include "modes/kick_trackMute.cpp"
 #include "modes/kick_padMute.cpp"
 #include "modes/kick_nextSequence.cpp"
+#include "modes/kick_TimingCorrect.cpp"
 #include "modes/kick_song.cpp"
 #include "modes/mixers/kick_MixerTabView.cpp"
 #include "modes/mixers/kick_PadMixer.cpp"
