@@ -252,13 +252,18 @@ namespace mt
             {
                 ++stepIndex;
                 resetSong();
-                if( playQueue.front().isEnabled )
-                {
-                    setSelectedSequence( playQueue.front().seq );
-                    play( playQueue.front().seq );
-                }
+                const auto step = playQueue.front();
                 playQueue.pop();
-                signals::onSongSequencePlay( playingSequence->getIndex(), -1, stepIndex );
+                // Sequence changes run on the tick thread (see defer()).
+                defer( [this, step]() {
+                    if( step.isEnabled )
+                    {
+                        setSelectedSequence( step.seq );
+                        play( step.seq );
+                    }
+                    if( playingSequence )
+                        signals::onSongSequencePlay( playingSequence->getIndex(), -1, stepIndex );
+                } );
             }
             else if( ( nextSequenceUpdateTicks <= playTime ) && ( nextSequenceUpdateTicks >= 0 ) )
             {
@@ -282,11 +287,22 @@ namespace mt
             auto lengthInTicks = length * playingSequence->getTicksPerBar();
             if( curTick % lengthInTicks == 0 )
             {
-                play( nextSequenceToPlay );
+                const int next     = nextSequenceToPlay;
                 nextSequenceToPlay = -1;
-                signals::onNextSequencePlay( playingSequence->getIndex() );
+                defer( [this, next]() {
+                    play( next );
+                    if( playingSequence )
+                        signals::onNextSequencePlay( playingSequence->getIndex() );
+                } );
             }
         }
+    }
+
+    void MTAudioTransportManager::defer( std::function<void()> Action )
+    {
+        const juce::SpinLock::ScopedLockType sl( deferredLock );
+        deferred.push_back( std::move( Action ) );
+        onTickEvent.signal();
     }
 
     void MTAudioTransportManager::processTick()
@@ -294,6 +310,28 @@ namespace mt
         while( !stopTickProcessing )
         {
             onTickEvent.wait( 1 );
+
+            // Sequence changes requested by the MIDI clock thread (NEXT SEQ at the loop end, song
+            // steps) run here, between two ticks: run from the clock thread, play() stopped the
+            // old sequence's tracks (clearing their queued notes) while this thread was inside
+            // MTTrack::onTick iterating them, an intermittent SIGSEGV. The tick that triggered the
+            // change belongs to the old clock run and is dropped.
+            {
+                std::vector<std::function<void()>> actions;
+                {
+                    const juce::SpinLock::ScopedLockType sl( deferredLock );
+                    actions.swap( deferred );
+                }
+                if( !actions.empty() )
+                {
+                    const ScopedAtomicResetter<bool> resetter( threadIsProcessingTick, false, true );
+                    for( auto& a : actions )
+                        a();
+                    prevTick.store( curTick );
+                    continue;
+                }
+            }
+
             if( prevTick == curTick )
                 continue;
             try
