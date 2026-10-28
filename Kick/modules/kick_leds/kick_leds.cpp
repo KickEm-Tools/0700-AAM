@@ -240,7 +240,7 @@ namespace kick_ui
                 }
                 case Screen::MenuLooper:
                 {
-                    contracts::DeviceControlContracts::BtnLedSequence::EN_LOOPER;
+                    id = contracts::DeviceControlContracts::BtnLedSequence::EN_LOOPER;
                     break;
                 }
                 case Screen::MenuSampler:
