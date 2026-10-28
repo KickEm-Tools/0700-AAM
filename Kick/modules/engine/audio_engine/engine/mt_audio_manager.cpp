@@ -157,6 +157,8 @@ namespace mt
         //DBG( "LP: FM2: " << engine.getFeeMemory() );
         undoManager.clearUndoHistory();
         vTree = projectManager::loadOrCreate( ProjectFile );
+        // Which project was loaded, for logs and scripted checks.
+        juce::Logger::writeToLog( "Project: loaded " + ProjectFile.getFullPathName() );
 
 #if defined( USE_VALUE_TREE_DEBUGGER ) && ( USE_VALUE_TREE_DEBUGGER > 0 )
         debugger.setSource( vTree );

@@ -26,6 +26,18 @@
 
 namespace ui
 {
+    /// The component that full-screen popups (dialogs, the loading spinner) and notification
+    /// bubbles are added to (kick_utils_popup.cpp, kick_utils_bubble.cpp): the app's main window,
+    /// registered by apps/kick/Main.cpp. On the unit that window covers the 1024x600 display, so
+    /// the overlays appear where they always did. On a desktop the window can sit anywhere on a
+    /// larger display, and the overlays stay inside it instead of covering the top-left of the
+    /// computer's display. When nothing is registered (other apps), they go on the desktop.
+    inline juce::Component::SafePointer<juce::Component>& overlayRoot()
+    {
+        static juce::Component::SafePointer<juce::Component> root;
+        return root;
+    }
+
     struct KickControlsProcessor
     {
         virtual ~KickControlsProcessor() = default;
@@ -136,7 +148,9 @@ namespace ui
         }
 
         // Class Methods...
-        inline bool hasSelectionFocus() const { return ComponentType::hasKeyboardFocus(); }
+        // The test-control fallback (test_control/source/kick_FocusFallback.h) only counts while
+        // KICK_TEST_CONTROL is set; otherwise these are JUCE's keyboard focus and nothing else.
+        inline bool hasSelectionFocus() const { return ComponentType::hasKeyboardFocus() || testcontrol::FocusFallback::is( this ); }
         inline void setSelectionEnabled( bool enabled ) noexcept { ComponentType::setWantsKeyboardFocus( enabled ); }
         inline bool isSelectionEnabled() const noexcept { return ComponentType::getWantsKeyboardFocus(); }
 
@@ -146,16 +160,20 @@ namespace ui
                 ComponentType::grabKeyboardFocus();
             else
                 ComponentType::giveAwayKeyboardFocus();
+            testcontrol::FocusFallback::note( this, focus && ComponentType::isShowing() );
         }
     };
 
     static inline KickControlsProcessor* getComponentInFocus()
     {
+        if( auto* c = testcontrol::FocusFallback::get() )
+            return dynamic_cast<KickControlsProcessor*>( c );
         return dynamic_cast<KickControlsProcessor*>( juce::Component::getCurrentlyFocusedComponent() );
     };
 
     static inline void clearFocusComponent()
     {
         juce::Component::unfocusAllComponents();
+        testcontrol::FocusFallback::clear();
     }
 }
