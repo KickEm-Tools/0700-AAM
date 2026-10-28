@@ -32,6 +32,7 @@ namespace contracts
     std::atomic<bool> halfLevelState{ false };
 
     bool DclContractsHelper::isShiftPressed() { return shiftBtnState.load(); }
+    void DclContractsHelper::setShiftPressed( bool state ) { shiftBtnState.store( state ); }
     void DclContractsHelper::setHalfLevel( bool state ) { halfLevelState.store( state ); }
     bool DclContractsHelper::isHalfLevel() { return halfLevelState.load(); }
     bool DclContractsHelper::isButtonMessage( const CPktMgr::HWMsg_t& hwMsg ) { return ( hwMsg.pktType == CPktMgr::enumPacketType::EN_PKT_TYPE_BUTTON ) && ( hwMsg.pktCmd == contracts::DeviceControlContracts::BtnCmd::EN_BTN_STATUS ); }
