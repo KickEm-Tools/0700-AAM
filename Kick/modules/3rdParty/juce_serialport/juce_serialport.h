@@ -39,11 +39,13 @@
  *  - the input stream is always empty,
  *  - the output stream discards writes.
  *
- * That is exactly what the simulator (SIM_BUILD) needs: there, hardware events come
- * from the on-screen controls through SimulatorInterface and the serial path is
- * compiled out. For a real device build you must replace this directory with a
- * working serial-port implementation. A non-simulator build emits a compiler
- * warning below so this cannot be forgotten silently.
+ * That is enough to build and run Kick on a desktop: there is no /dev/ttymxc0, so the
+ * serial path in input_events.cpp never opens a port (macOS and Windows builds drive
+ * the control surface from the keyboard instead, modules/contracts/utils/keyboard). On
+ * the device it means the control surface (pads, buttons, knobs, LEDs) is unreachable:
+ * a real device build must replace this directory with a working serial-port
+ * implementation. Every Linux build emits a compiler warning below so this cannot be
+ * forgotten silently.
  */
 
 #pragma once
@@ -55,8 +57,8 @@
 
     #include <functional>
 
-    #if !defined( SIM_BUILD ) && ( JUCE_LINUX || __linux__ )
-        #warning "juce_serialport is a stub: the control surface will not be reachable in this build. See modules/3rdParty/juce_serialport/juce_serialport.h"
+    #if JUCE_LINUX || defined( __linux__ )
+        #warning "juce_serialport is a stub: the control surface will not be reachable in this build. A device build needs a real implementation, see modules/3rdParty/juce_serialport/juce_serialport.h"
     #endif
 
 class SerialPortConfig
