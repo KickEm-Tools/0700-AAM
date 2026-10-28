@@ -1,7 +1,7 @@
 # Building Kick
 
 How to build the Kick application from this repository on macOS, a Linux desktop and Linux arm64,
-and what had to change to make the public release build at all. Section 8 lists the hooks for
+and what had to change to make the public release build at all. Section 9 lists the hooks for
 testing the app without a unit, all of them inert on the device.
 
 ## 1. What gets built
@@ -118,7 +118,7 @@ Loading a project prints `Project: loaded <path>`.
 Screens that drive the unit's hardware (Wi-Fi, Ethernet, CV, firmware update, the resource
 meters) say "not available on this system" on a computer, and the app does not touch the
 computer's network or clock. For scripted checks, the audio probe and the other test hooks, see
-section 8.
+section 9.
 
 Without the control-surface microcontroller there are no pads, buttons or knobs. On macOS (and
 Windows) the keyboard drives them instead (`Kick/modules/contracts/utils/keyboard`). On Linux the
@@ -247,29 +247,32 @@ and JUCE versions and the JUCE patch.
   (`.3rdPartySourceCache/`) or pass the same `-DCPM_SOURCE_CACHE=<dir>` every time.
 - **"#pragma message: juce_serialport is a stub" on Linux**: expected, see 5.2.
 
-## 8. Extension points for testing without a unit
+<!-- Section 8, the control-surface link and its tests, comes with feature/serialport (Kick/tests refers to it). -->
+
+## 9. Extension points for testing without a unit
 
 A few small hooks let a desktop build of Kick, or a test harness such as an emulator, run and
 check the app without the unit's hardware. **On a unit they do nothing**: each one is either off
 unless an environment variable is set, or it only acts when a piece of hardware is missing, and a
 unit has all of it. None of them contains emulator code.
 
-### 8.1 Environment variables
+### 9.1 Environment variables
 
 All of them are unset on a unit (`ktkick.service` sets none of them).
 
 | Variable | What it does | Where | On the unit (unset) |
 |---|---|---|---|
-| `KICK_TEST_CONTROL=<file>` | Starts the test-control module (8.3): the app polls `<file>` for commands that touch the screen, list or render it, and read the transport | `modules/test_control`, created by `apps/kick/Main.cpp` | Not created: nothing is polled or logged, focus is JUCE's alone |
+| `KICK_SERIAL_DEVICE=<absolute path>` | Opens that device for the control-surface link instead of `/dev/ttymxc0`, with the same settings (230400 8N1) and handshake: a USB serial adapter, or the pseudo-terminal of an emulated panel | `modules/input_events` (from `feature/serialport`) | `/dev/ttymxc0`, as always |
+| `KICK_TEST_CONTROL=<file>` | Starts the test-control module (9.3): the app polls `<file>` for commands that touch the screen, list or render it, and read the transport | `modules/test_control`, created by `apps/kick/Main.cpp` | Not created: nothing is polled or logged, focus is JUCE's alone |
 | `KICK_AUDIO_PROBE=<file.wav>` | `mt::AudioDevice` writes the engine's master output to that WAV (32-bit float) and logs `AudioProbe: t=<n>s peak=<x>dBFS rms=<y>dBFS` once per second of audio (`-120.0dBFS` is silence). The audio thread only copies into a lock-free FIFO; a background thread writes | `AudIO/AudIO_juce/source/mt_AudioDeviceProbe.*` | No probe object; the audio callback is unchanged |
 | `KICK_AUDIO_INPUT=silence\|device\|tone[:hz]\|pulse[:ms]\|<file>` | Replaces the device input on every channel with digital silence, a -12 dBFS sine (1 kHz default), 50 ms 1 kHz bursts at -6 dBFS every 500 ms (or `<ms>`), or a looped audio file; `device` (or unset) keeps the real input. Logged as `TestInput: ...` | same | The real input |
 | `KICK_LOG_NOTES=1` | The sequencer logs every note it plays: `Note: track '<name>' tick <t> pos <p> note <n> velocity <v> id <id>`. Read once | `engine/audio_engine/engine/mt_audio_track.cpp` | Nothing logged |
-| `KICK_HARDWARE=none\|<list>` | Overrides the hardware probe (8.2): `none` makes every feature unavailable, `wifi,clock` makes exactly those available, on any platform. Read once and logged once (`Hardware: KICK_HARDWARE=...`) | `modules/hardware/source/kick_HardwareProbe.*` | The probe decides, and finds everything |
+| `KICK_HARDWARE=none\|<list>` | Overrides the hardware probe (9.2): `none` makes every feature unavailable, `wifi,clock` makes exactly those available, on any platform. Read once and logged once (`Hardware: KICK_HARDWARE=...`) | `modules/hardware/source/kick_HardwareProbe.*` | The probe decides, and finds everything |
 
 Paths are relative to the working directory. One log line is always written, on every platform:
 `Project: loaded <path>` when a project is loaded (`MTAudioManager::loadProject`).
 
-### 8.2 The hardware probe
+### 9.2 The hardware probe
 
 Some screens and helpers exist only to drive the unit's hardware or its Linux: they run `ifconfig`,
 `killall -9 wpa_supplicant`, `timedatectl`, open `/dev/i2c-3`, or scan for `.swu` images.
@@ -297,7 +300,7 @@ On macOS every feature is unavailable. On a Linux desktop the probe usually find
 maybe `wlan0`): set `KICK_HARDWARE=none` so the app never reconfigures your computer's network or
 clock. In a VM that should behave like a unit, leave it unset.
 
-### 8.3 The test-control module
+### 9.3 The test-control module
 
 `modules/test_control` is a generic, file-driven test channel for the screen, for scripted
 checks. With `KICK_TEST_CONTROL=<file>` set the app logs `TestControl: listening on <file>`, then
@@ -338,7 +341,7 @@ How it works, and what it does not do:
 - **Panel input** (keys, pads, encoders, slider) is not part of it. It comes over the serial
   port, from the unit's control surface or from an emulator playing its part.
 
-### 8.4 Popups and lists on a desktop
+### 9.4 Popups and lists on a desktop
 
 Two generic changes make the screen behave on a desktop as on the unit, with no switch:
 
