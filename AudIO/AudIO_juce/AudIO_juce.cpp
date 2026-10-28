@@ -10,5 +10,6 @@
 // implementation files are pulled in here.
 #include "AudIO_juce.h"
 
+#include "source/mt_AudioDeviceProbe.cpp"
 #include "source/mt_AudioDevice.cpp"
 #include "source/mt_Recorder.cpp"
