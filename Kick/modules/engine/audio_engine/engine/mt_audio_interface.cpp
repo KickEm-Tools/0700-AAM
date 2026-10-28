@@ -939,6 +939,12 @@ namespace mt
         return manager->stop();
     }
 
+    void MTAudioInterface::setSequenceRecord( bool Record, bool Overdub ) { manager->setRecordMode( Record, Overdub ); }
+    bool MTAudioInterface::isSequenceRecordArmed() { return manager->isRecordArmed(); }
+    bool MTAudioInterface::isSequenceRecordOverdub() { return manager->isRecordOverdub(); }
+    bool MTAudioInterface::isSequenceRecording() { return manager->isTakeRunning(); }
+    void MTAudioInterface::setRecordTimingCorrect( std::function<int( int )> Correct ) { MTTrack::recordTimingCorrect = std::move( Correct ); }
+
     bool MTAudioInterface::isSequencePlaying()
     {
         return manager->isPlaying();
@@ -1747,7 +1753,10 @@ namespace mt
     {
         DBG( "addLiveMidiNoteFuntion" );
         if( auto t = manager->getTrack( Selection ) )
+        {
+            manager->recordLiveMidi( t, Msg ); // RECORD / OVERDUB take on this track
             t->processIncomingMidiMessage( Msg );
+        }
         return 0;
     }
 

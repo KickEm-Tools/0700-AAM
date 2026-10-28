@@ -67,9 +67,20 @@ namespace mt
         void setNextSequence( int NextSequence );
         void setNextBarFlag( bool NextBarFlag );
 
+        // Note recording (RECORD / OVERDUB keys). Record = true arms, or punches in at once while
+        // playing; the take runs on the selected track until STOP, disarm, or the other mode.
+        // Pressing the armed mode's key again disarms. Overdub = false is RECORD (replace).
+        void setRecordMode( bool Record, bool Overdub );
+        bool isRecordArmed() const noexcept { return recordArmed.load(); }
+        bool isRecordOverdub() const noexcept { return recordOverdub.load(); }
+        bool isTakeRunning() const noexcept { return nullptr != takeTrack.load(); }
+        void recordLiveMidi( MTTrack* Track, const juce::MidiMessage& Msg );
+
     private:
         int  startPlayback( int Seq, bool Resume );
         void defer( std::function<void()> Action ); // run on the tick thread, between two ticks
+        void beginTake();
+        void endTake();
 
         void onTick( unsigned int Ticks ) override;
         void onBeat();
@@ -116,6 +127,10 @@ namespace mt
         std::atomic<bool>         threadIsProcessingTick{ false };
         std::atomic<unsigned int> prevTick{ 0 };
         std::atomic<unsigned int> curTick{ 0 };
+
+        std::atomic<bool>     recordArmed{ false };
+        std::atomic<bool>     recordOverdub{ false };
+        std::atomic<MTTrack*> takeTrack{ nullptr };
 
         juce::SpinLock                     deferredLock;
         std::vector<std::function<void()>> deferred;

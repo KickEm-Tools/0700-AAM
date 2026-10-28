@@ -143,6 +143,7 @@ namespace mt
         {
             if( playingSequence && ( s != playingSequence ) )
             {
+                endTake();
                 playingSequence->stop();
                 Resume = false; // another sequence: there is no paused position to resume
             }
@@ -155,10 +156,15 @@ namespace mt
             }
             else
             {
+                endTake(); // a running take ends where the old pass stops
                 playingSequence->play();
             }
 
             setTransportState( TransportState::Playing );
+
+            // RECORD / OVERDUB armed while stopped: the take starts with playback.
+            if( recordArmed.load() && !isTakeRunning() )
+                beginTake();
             retVal = 0;
         }
 
@@ -172,6 +178,10 @@ namespace mt
 
     int MTAudioTransportManager::pause()
     {
+        // STOP ends a recording take and disarms RECORD / OVERDUB.
+        endTake();
+        recordArmed.store( false );
+
         midiClock.stop();
         setTransportState( TransportState::Paused );
 
@@ -186,6 +196,9 @@ namespace mt
 
     int MTAudioTransportManager::stop()
     {
+        endTake();
+        recordArmed.store( false );
+
         midiClock.stop();
         setTransportState( TransportState::Stopped );
 
@@ -214,6 +227,58 @@ namespace mt
             }
         }
         return -1;
+    }
+
+    ///
+    /// Note recording (RECORD / OVERDUB keys).
+    ///
+    void MTAudioTransportManager::setRecordMode( bool Record, bool Overdub )
+    {
+        const bool sameMode = recordArmed.load() && ( recordOverdub.load() == Overdub );
+        endTake();
+        if( !Record || sameMode )
+        {
+            recordArmed.store( false );
+            juce::Logger::writeToLog( "Record: disarmed" );
+        }
+        else
+        {
+            recordOverdub.store( Overdub );
+            recordArmed.store( true );
+            juce::Logger::writeToLog( juce::String( "Record: armed for " ) + ( Overdub ? "OVERDUB" : "RECORD" ) );
+            if( isPlaying() )
+                beginTake(); // punch in
+        }
+
+        if( auto pSeq = getSequence() )
+            pSeq->setRecordState( isTakeRunning() ? RecordState::Recording : ( recordArmed.load() ? RecordState::Armed : RecordState::NotArmed ) );
+    }
+
+    void MTAudioTransportManager::beginTake()
+    {
+        if( !playingSequence )
+            return;
+        auto pTrack = getTrack();
+        if( !pTrack || 0 == playingSequence->getNumTracks() || ( playingSequence != getSequence() ) )
+            return;
+
+        pTrack->startRecording( !recordOverdub.load() );
+        takeTrack.store( pTrack );
+        playingSequence->setRecordState( RecordState::Recording );
+    }
+
+    void MTAudioTransportManager::endTake()
+    {
+        if( auto pTrack = takeTrack.exchange( nullptr ) )
+            pTrack->stopRecording();
+        if( playingSequence )
+            playingSequence->setRecordState( recordArmed.load() ? RecordState::Armed : RecordState::NotArmed );
+    }
+
+    void MTAudioTransportManager::recordLiveMidi( MTTrack* Track, const juce::MidiMessage& Msg )
+    {
+        if( Track && Track == takeTrack.load() )
+            Track->recordMidiMessage( Msg );
     }
 
     void MTAudioTransportManager::seek( int posInTicks )
