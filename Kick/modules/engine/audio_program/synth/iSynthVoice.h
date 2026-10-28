@@ -54,6 +54,13 @@ namespace mt
 
         virtual void noteOff();
         virtual void noteOn( int Note, int Velocity );
+
+        // The pad's own LEVEL and PAN (PAD MIX), set before noteOn by programs that have them.
+        void setNoteGainAndPan( float Gain, float Pan ) noexcept
+        {
+            noteGain = Gain;
+            notePan  = Pan;
+        }
         void         noteMute( int Note, bool Mute );
         void         noteReset( int Note );
         void         noteOff( int Note );
@@ -75,6 +82,8 @@ namespace mt
 
         const MTIAtomicProgramMaster& master;
 
+        float  noteGain{ 1.f };
+        float  notePan{ 0.f };
         int    noteNo{ 0 };
         double sampleRate{ 48000 };
 

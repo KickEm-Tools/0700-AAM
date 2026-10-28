@@ -34,14 +34,17 @@ namespace mt
             semi.onValueChanged = CalculatePitchRatio;
             fine.onValueChanged = CalculatePitchRatio;
 
+            // The program LEVEL (0..127, TRACK MIX / Programs strip, PROGRAM `level`) scales the
+            // program's output like CommonUtils::midiToGain; it was stored but never heard.
             auto CalculateLRGains = [&]() {
-                panner.setParameters( pan(), gain() );
+                panner.setParameters( pan(), gain() * (float)level() * MIDI::SCALER );
                 gainL = isMuted() ? 0.f : panner.getLeft();
                 gainR = isMuted() ? 0.f : panner.getRight();
             };
             isMuted.onValueChanged = CalculateLRGains;
             gain.onValueChanged    = CalculateLRGains;
             pan.onValueChanged     = CalculateLRGains;
+            level.onValueChanged   = CalculateLRGains;
 
             attachTo( Tree );
         }
@@ -56,6 +59,7 @@ namespace mt
             poly.attachTo( Tree, IDs::poly, Undo, POLYPHONY::DEFAULT, POLYPHONY::MIN, POLYPHONY::MAX );
             gain.attachTo( Tree, IDs::gain, Undo, GAIN::DEFAULT, GAIN::MIN, GAIN::MAX );
             pan.attachTo( Tree, IDs::pan, Undo, PAN::DEFAULT, PAN::MIN, PAN::MAX );
+            level.attachTo( Tree, IDs::level, Undo, MIDI::LEVEL_DEFAULT, MIDI::MIN, MIDI::MAX );
         }
 
         Atomic<bool>  isMuted;
@@ -65,6 +69,7 @@ namespace mt
         Atomic<int>   poly;
         Atomic<float> gain;
         Atomic<float> pan;
+        Atomic<int>   level;
 
         std::atomic<float> pitchRatio;
         std::atomic<float> gainL;
@@ -133,7 +138,10 @@ namespace mt
             MTIAtomicADSR::attachTo( Tree );
             isEnabled.attachTo( Tree, IDs::isEnabled, Undo, 0.f );
             ampMod.attachTo( Tree, IDs::level, Undo, 0 );
-            panMod.attachTo( Tree, IDs::pan, Undo, 1.f );
+            // DrumVoice maps this 0..127 amount to -1..1 (jmap) and pans by velocity x amount, so
+            // the neutral amount is the middle of the range. The default used to be 1, i.e. -0.98:
+            // every drum hit was panned hard left (left -9 dBFS, right -24 dBFS for one pad hit).
+            panMod.attachTo( Tree, IDs::pan, Undo, 64 );
             velMod.attachTo( Tree, IDs::velocity, Undo, 1.f );
         }
 
