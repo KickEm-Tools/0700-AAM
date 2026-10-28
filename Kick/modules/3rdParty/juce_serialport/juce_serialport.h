@@ -44,8 +44,9 @@
  * the control surface from the keyboard instead, modules/contracts/utils/keyboard). On
  * the device it means the control surface (pads, buttons, knobs, LEDs) is unreachable:
  * a real device build must replace this directory with a working serial-port
- * implementation. Every Linux build emits a compiler warning below so this cannot be
- * forgotten silently.
+ * implementation. Every Linux build prints a compiler message below so this cannot be
+ * forgotten silently. It is a `#pragma message` rather than a `#warning` because
+ * Kick/CMakeLists.txt compiles with `-w`, which hides `#warning`.
  */
 
 #pragma once
@@ -58,7 +59,7 @@
     #include <functional>
 
     #if JUCE_LINUX || defined( __linux__ )
-        #warning "juce_serialport is a stub: the control surface will not be reachable in this build. A device build needs a real implementation, see modules/3rdParty/juce_serialport/juce_serialport.h"
+        #pragma message( "juce_serialport is a stub: the control surface will not be reachable in this build. A device build needs a real implementation, see modules/3rdParty/juce_serialport/juce_serialport.h" )
     #endif
 
 class SerialPortConfig
