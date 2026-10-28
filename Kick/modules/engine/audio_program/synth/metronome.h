@@ -37,6 +37,7 @@ namespace mt
 
     private:
         ASoundSlice                               slice;
+        ASoundSlice                               accentSlice; // bar click, when the sound set has one
         std::vector<std::unique_ptr<ISynthVoice>> voices;
     };
 
