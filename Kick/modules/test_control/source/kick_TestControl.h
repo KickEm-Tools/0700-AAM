@@ -35,6 +35,7 @@ namespace testcontrol
     /// Arguments with spaces can be quoted ("Firmware Update"). Commands:
     ///
     ///     tap X Y             touch pixel (X, Y) of the screen (the 1024x600 main window)
+    ///     touch X Y           the same, as a real touch through the window (see below)
     ///     click NAME          touch the centre of the showing component titled (or named) NAME
     ///     clickat NAME FX FY  touch NAME at fraction (FX, FY) of its size
     ///     list [FILTER]       log the showing, titled components: "TestControl: item <type>
@@ -53,6 +54,17 @@ namespace testcontrol
     /// while the computer's screen is locked or the window is covered. Like a finger, a touch
     /// goes to whatever is on top at that point. A touch also gives keyboard focus to the touched
     /// control and records it in FocusFallback, which is active only while this module runs.
+    /// Mouse listeners of parent components (a list's canvas, KickTableView) do not hear these.
+    ///
+    /// "touch X Y" is the exception: it hands a button-down and, 80 ms later, a button-up at that
+    /// point to the window's ComponentPeer (as the main mouse source), so JUCE dispatches it as it
+    /// dispatches a click or a finger: to the component under the point, its mouse listeners and
+    /// its parents' listeners, with JUCE's own focus handling. JUCE asks the operating system
+    /// whether the window is the topmost one at that point. If it is not (window covered), the
+    /// window floats above the others for the touch (always-on-top, without activating the app)
+    /// and is put back afterwards. If it still is not (screen locked), the command answers with
+    /// an error instead of touching. A real mouse moved over the window during those 80 ms
+    /// shares the source and can move the button-up.
     ///
     /// Only the screen is driven here. Keys, pads, encoders and the slider are the control
     /// surface's job and arrive over the serial port.
@@ -75,6 +87,7 @@ namespace testcontrol
 
         juce::Component* findComponent( const juce::String& Name );
         juce::String     touch( juce::Component& Target, juce::Point<float> PosInTarget, std::function<void()> Done );
+        juce::String     peerTouch( juce::Point<float> PosOnScreen, std::function<void()> Done, std::function<void( const juce::String& )> Fail );
         juce::String     snapshot( const juce::File& Out );
         juce::Array<juce::Component*> desktopWindows();
 
