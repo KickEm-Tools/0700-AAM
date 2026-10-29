@@ -41,6 +41,11 @@ namespace testcontrol
 
     #include <atomic>
     #include <cerrno>
+    #include <cstdlib>
+    #include <typeinfo>
+    #if defined( __GNUC__ ) || defined( __clang__ )
+        #include <cxxabi.h>
+    #endif
     #include <cstring>
     #include <mutex>
     #include <vector>
@@ -57,6 +62,21 @@ namespace testcontrol
     namespace
     {
         void mirrorLog( const juce::String& S ) { juce::Logger::writeToLog( "ScreenMirror: " + S ); }
+
+        /// "PROGRAMS (ui::KickLabel)": a component's title or name, and its class.
+        juce::String describe( const juce::Component& C )
+        {
+            juce::String type( typeid( C ).name() );
+    #if defined( __GNUC__ ) || defined( __clang__ )
+            int  status = 0;
+            auto* name  = abi::__cxa_demangle( typeid( C ).name(), nullptr, nullptr, &status );
+            if( status == 0 && name != nullptr )
+                type = name;
+            std::free( name );
+    #endif
+            const auto title = C.getTitle().isNotEmpty() ? C.getTitle() : C.getName();
+            return title.isNotEmpty() ? title + " (" + type + ")" : type;
+        }
 
         constexpr int maxFramesPerSecond = 30;
 
@@ -694,7 +714,7 @@ namespace testcontrol
                 {
                     auto* c = getComponent().getComponentAt( pos.roundToInt() );
                     mirrorLog( juce::String( down ? "touch down " : "touch up " ) + juce::String( X ) + " " + juce::String( Y )
-                               + ( c != nullptr ? " on " + ( c->getTitle().isNotEmpty() ? c->getTitle() : c->getName() ) : juce::String() ) );
+                               + ( c != nullptr ? " on " + describe( *c ) : juce::String() ) );
                 }
                 wasDown = down;
                 // The main mouse source, as on the unit (JUCE makes touch sources only where the
