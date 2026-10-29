@@ -38,7 +38,8 @@ namespace testcontrol
     ///   raw encoding, only the areas that changed, one viewer at a time (a new one replaces the
     ///   old). The socket is created with mode 0600, never on a network;
     /// - turns the viewer's pointer into touches: button 1 down, moves while it is down, button 1
-    ///   up go to the peer's handleMouseEvent, as a native window's events do, so JUCE dispatches
+    ///   up go to the peer's handleMouseEvent, as a native window's events do (moves with no button
+    ///   held are ignored: a touch panel has no hover), so JUCE dispatches
     ///   them to the component under the point, its mouse listeners and its parents' (list rows,
     ///   drags, sliders) exactly as a finger on the unit's screen.
     ///

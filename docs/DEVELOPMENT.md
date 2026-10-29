@@ -642,7 +642,8 @@ it does for a native window.
   network listener. Viewers may ask for any 32-bit true-colour pixel format.
 - **Touches.** The viewer's pointer events become mouse events on the peer, through
   `ComponentPeer::handleMouseEvent` as a native window's are: button 1 down, moves while it is
-  down, button 1 up. JUCE then dispatches them to the component under the point, its mouse
+  down, button 1 up. Moves with no button held (a viewer's hover) are ignored, since a touch
+  panel has no hover. JUCE then dispatches them to the component under the point, its mouse
   listeners and its parents' listeners (list rows, drags, sliders), with its own focus handling,
   as for a finger on the unit's screen. The peer reports itself focused (it is the only window),
   so JUCE gives keyboard focus to touched controls. Keyboard events from the viewer are ignored:

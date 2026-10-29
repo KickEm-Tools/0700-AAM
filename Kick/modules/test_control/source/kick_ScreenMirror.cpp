@@ -705,6 +705,8 @@ namespace testcontrol
                 // Button 1 is the finger: down, moves while down (drags), up. As a native window's
                 // events do, update the modifier state first, then hand the event to the peer.
                 const bool down = ( Mask & 1 ) != 0;
+                if( !down && !wasDown )
+                    return; // hover: a touch panel has none (viewers send it as the mouse moves)
                 auto       mods = juce::ModifierKeys::currentModifiers.withoutMouseButtons();
                 if( down )
                     mods = mods.withFlags( juce::ModifierKeys::leftButtonModifier );
