@@ -70,6 +70,8 @@ namespace mt
         }
 
         allocateFifos( actualBuffer );
+        probe     = AudioProbe::createFromEnvironment( actualRate, (int)numOuts );
+        testInput = TestInput::createFromEnvironment( actualRate );
         prepareToPlay( (uint32_t)actualRate, chunk );
 
         running.store( true );
@@ -109,6 +111,8 @@ namespace mt
         running.store( false );
         setState( AudIO::AudioDeviceState::stopped );
         teardown();
+        probe     = nullptr;
+        testInput = nullptr;
     }
 
     void AudioDevice::audioDeviceAboutToStart( juce::AudioIODevice* ) {}
@@ -161,8 +165,26 @@ namespace mt
             }
             inAvail -= (int)chunk;
 
+            if( testInput )
+            {
+                float* ins[8] = {};
+                const auto n  = (int)juce::jmin<uint32_t>( 8, _buffer.getNumInputChannels() );
+                for( int ch = 0; ch < n; ++ch )
+                    ins[ch] = _buffer.getInputBuffer( (uint32_t)ch );
+                testInput->render( ins, n, (int)chunk );
+            }
+
             _buffer.clearOutputs();
             process( _buffer ); // IAudioDevice -> engine callback
+
+            if( probe )
+            {
+                float* outs[8] = {};
+                const auto n   = (int)juce::jmin<uint32_t>( 8, _buffer.getNumOutputChannels() );
+                for( int ch = 0; ch < n; ++ch )
+                    outs[ch] = _buffer.getOutputBuffer( (uint32_t)ch );
+                probe->push( outs, n, (int)chunk );
+            }
 
             for( uint32_t ch = 0; ch < numOuts; ++ch )
             {

@@ -3,9 +3,9 @@
 
   ID:                 juce_serialport
   vendor:             MUSIC Tribe
-  version:            0.1.0
-  name:               Serial port stub
-  description:        API-compatible stub of the juce_serialport module. Compiles everywhere, talks to no hardware.
+  version:            1.0.0
+  name:               Serial port
+  description:        POSIX (termios) serial port with JUCE input / output streams. Linux and macOS; a stub on Windows.
   website:
   license:            AGPLv3
   dependencies:       juce_core, juce_events
@@ -23,44 +23,53 @@
  * Software Foundation, either version 3 of the License, or (at your option)
  * any later version.
  *
+ * Kick is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+ * FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with Kick. If not, see <https://www.gnu.org/licenses/>.
+ *
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
 /*
- * WHY THIS FILE EXISTS
+ * A serial port for the link between the Kick app and the control-surface microcontroller
+ * (/dev/ttymxc0 on the unit, modules/input_events). Written for this repository: the module the
+ * original tree vendored had no licence and was removed from the public release, so this keeps
+ * the API that input_events uses and implements it from scratch on termios.
  *
- * The original Kick tree vendored the community `juce_serialport` module, which has
- * no license and was therefore removed from the public release. `modules/input_events`
- * still includes it and uses a handful of its classes to talk to the control-surface
- * microcontroller over /dev/ttymxc0 on the device.
+ *  - SerialPort opens a device with O_NOCTTY, puts it in raw mode and applies a
+ *    SerialPortConfig (baud rate, data bits, parity, stop bits, flow control).
+ *  - SerialPortInputStream runs a reader thread that appends everything the port delivers to a
+ *    buffer and tells its ChangeListeners (on the message thread) that data arrived.
+ *  - SerialPortOutputStream writes straight to the port; it has no buffer of its own.
+ *  - SerialPort::getSerialPortPaths() lists the serial devices in /dev.
  *
- * This stub reproduces the public API surface that Kick uses, with no behaviour:
- *  - the port never opens,
- *  - the input stream is always empty,
- *  - the output stream discards writes.
- *
- * That is enough to build and run Kick on a desktop: there is no /dev/ttymxc0, so the
- * serial path in input_events.cpp never opens a port (macOS and Windows builds drive
- * the control surface from the keyboard instead, modules/contracts/utils/keyboard). On
- * the device it means the control surface (pads, buttons, knobs, LEDs) is unreachable:
- * a real device build must replace this directory with a working serial-port
- * implementation. Every Linux build prints a compiler message below so this cannot be
- * forgotten silently. It is a `#pragma message` rather than a `#warning` because
- * Kick/CMakeLists.txt compiles with `-w`, which hides `#warning`.
+ * Windows has no termios: there the classes compile, the port never opens, reads are empty and
+ * writes are discarded (the app drives the control surface from the keyboard on desktops).
  */
 
 #pragma once
-#ifndef JUCE_SERIALPORT_STUB_H_INCLUDED
-    #define JUCE_SERIALPORT_STUB_H_INCLUDED
+#ifndef JUCE_SERIALPORT_H_INCLUDED
+    #define JUCE_SERIALPORT_H_INCLUDED
 
     #include <juce_core/juce_core.h>
     #include <juce_events/juce_events.h>
 
+    #include <atomic>
     #include <functional>
+    #include <vector>
 
-    #if JUCE_LINUX || defined( __linux__ )
-        #pragma message( "juce_serialport is a stub: the control surface will not be reachable in this build. A device build needs a real implementation, see modules/3rdParty/juce_serialport/juce_serialport.h" )
+    #if JUCE_WINDOWS
+        #pragma message( "juce_serialport has no Windows implementation: serial ports never open in this build" )
+        #define JUCE_SERIALPORT_POSIX 0
+    #else
+        #define JUCE_SERIALPORT_POSIX 1
     #endif
+
+class SerialPortInputStream;
 
 class SerialPortConfig
 {
@@ -94,6 +103,9 @@ public:
     {
     }
 
+    /// "230400 8N1, no flow control", for logs.
+    juce::String toString() const;
+
     juce::uint32          bps         = 9600;
     juce::uint32          databits    = 8;
     SerialPortParity      parity      = SERIALPORT_PARITY_NONE;
@@ -104,94 +116,138 @@ public:
 class SerialPort
 {
 public:
+    /// Called with a short context ("SerialPort open") and a message, for every error and state
+    /// change. May be called from the reader thread.
     using DebugFunction = std::function<void( juce::String, juce::String )>;
 
-    SerialPort( DebugFunction debug = nullptr )
-        : debugFn( std::move( debug ) )
-    {
-    }
+    SerialPort( DebugFunction debug = nullptr );
+    /// Opens portPath and applies portConfig. Check isOpen() for the result.
+    SerialPort( const juce::String& portPath, const SerialPortConfig& portConfig, DebugFunction debug = nullptr );
+    virtual ~SerialPort();
 
-    SerialPort( const juce::String& portPath, const SerialPortConfig& portConfig, DebugFunction debug = nullptr )
-        : debugFn( std::move( debug ) )
-    {
-        open( portPath );
-        setConfig( portConfig );
-    }
+    /// The serial devices in /dev, as { name, path } pairs, for example { "ttymxc0", "/dev/ttymxc0" }.
+    /// Linux: ttyS*, ttyUSB*, ttyACM*, ttyAMA*, ttymxc*, ttyLP*, rfcomm*. macOS: cu.* and tty.*.
+    /// Empty on Windows.
+    static juce::StringPairArray getSerialPortPaths();
 
-    virtual ~SerialPort() { close(); }
+    /// Opens the device (O_RDWR | O_NOCTTY), in raw mode, and keeps the current settings until
+    /// setConfig() is called. Closes a port that is already open first.
+    bool open( const juce::String& newPortPath );
+    /// Stops the reader threads of the attached input streams, then closes the device.
+    void close();
+    /// True when the path of this port names an existing file.
+    bool exists() const;
+    bool isOpen() const;
 
-    /// On the device this enumerates /dev/tty*. The stub reports no ports.
-    static juce::StringPairArray getSerialPortPaths() { return {}; }
+    /// Applies a configuration to the open port: baud rate, 5-8 data bits, parity, 1 or 2 stop
+    /// bits (1.5 is not available through termios and fails), flow control. Raw mode, receiver
+    /// on, modem lines ignored. Returns false if the port is closed or the device refused it.
+    bool setConfig( const SerialPortConfig& newConfig );
+    /// Reads the configuration back from the device (what it actually accepted).
+    bool         getConfig( SerialPortConfig& outConfig ) const;
+    juce::String getPortPath() const { return portPath; }
 
-    bool open( const juce::String& newPortPath )
-    {
-        portPath = newPortPath;
-        if( debugFn ) debugFn( "juce_serialport stub", "open(" + newPortPath + ") ignored: no serial support in this build" );
-        return false;
-    }
+    /// Writes every byte, waiting for the device to accept them (up to timeoutMs per stall).
+    /// Returns false if the port is closed, the write failed or the device stalled.
+    bool write( const void* data, size_t numBytes, int timeoutMs = 1000 );
 
-    void close() { portPath.clear(); }
-    bool exists() const { return false; }
-    bool isOpen() const { return false; }
+    /// The file descriptor, or -1.
+    int getHandle() const { return fd.load(); }
 
-    bool             setConfig( const SerialPortConfig& newConfig ) { config = newConfig; return false; }
-    bool             getConfig( SerialPortConfig& outConfig ) const { outConfig = config; return false; }
-    juce::String     getPortPath() const { return portPath; }
+    void report( const juce::String& context, const juce::String& message ) const;
 
 private:
-    juce::String     portPath;
-    SerialPortConfig config;
-    DebugFunction    debugFn;
+    friend class SerialPortInputStream;
+    void attach( SerialPortInputStream* );
+    void detach( SerialPortInputStream* );
+
+    juce::String                          portPath;
+    std::atomic<int>                      fd{ -1 };
+    DebugFunction                         debugFn;
+    juce::CriticalSection                 streamsLock, writeLock;
+    juce::Array<SerialPortInputStream*>   streams;
 
     JUCE_DECLARE_NON_COPYABLE( SerialPort )
 };
 
+/// Bytes received from a SerialPort. A reader thread appends everything the port delivers to an
+/// internal buffer; read() consumes from the front of it. ChangeListeners are called on the
+/// message thread when data arrives (see setNotify). While a listener runs, getTotalLength()
+/// and read() on the message thread see only the bytes that had arrived when the callback
+/// started, so a listener that asks for the length and then reads that many bytes gets exactly
+/// that many even if more arrive meanwhile; the newer bytes cause another callback.
 class SerialPortInputStream : public juce::InputStream,
-                              public juce::ChangeBroadcaster
+                              public juce::ChangeBroadcaster,
+                              private juce::Thread,
+                              private juce::AsyncUpdater
 {
 public:
     enum notifyflag
     {
-        NOTIFY_OFF = 0,
-        NOTIFY_ON_CHAR,
-        NOTIFY_ALWAYS
+        NOTIFY_OFF = 0, ///< no change messages
+        NOTIFY_ON_CHAR, ///< a change message when the notify character arrives
+        NOTIFY_ALWAYS ///< a change message whenever data arrives
     };
 
-    explicit SerialPortInputStream( SerialPort* ) {}
-    ~SerialPortInputStream() override = default;
+    explicit SerialPortInputStream( SerialPort* port );
+    ~SerialPortInputStream() override;
 
-    void setNotify( notifyflag flag = NOTIFY_ON_CHAR, char c = 0 )
-    {
-        notify     = flag;
-        notifyChar = c;
-    }
+    void setNotify( notifyflag flag = NOTIFY_ON_CHAR, char c = 0 );
 
-    bool canReadLine() const { return false; }
-    bool canReadString() const { return false; }
+    /// True when a '\n' is buffered.
+    bool canReadLine() const;
+    /// True when a '\0' is buffered.
+    bool canReadString() const;
+
+    /// The reader thread is running (the port is open and has not hung up or failed).
+    bool isReading() const { return isThreadRunning(); }
 
     // juce::InputStream
-    juce::int64 getTotalLength() override { return 0; }
-    bool        isExhausted() override { return true; }
-    int         read( void*, int ) override { return 0; }
-    juce::int64 getPosition() override { return 0; }
+    juce::int64 getTotalLength() override;
+    bool        isExhausted() override;
+    int         read( void* destBuffer, int maxBytesToRead ) override;
+    juce::int64 getPosition() override { return position; }
     bool        setPosition( juce::int64 ) override { return false; }
 
 private:
-    notifyflag notify     = NOTIFY_ON_CHAR;
-    char       notifyChar = 0;
+    friend class SerialPort;
+    void   run() override;
+    void   handleAsyncUpdate() override;
+    void   stopReading();
+    size_t readableBytesLocked() const;
+
+    SerialPort*               port;
+    int                       wakePipe[2]{ -1, -1 };
+    juce::CriticalSection     bufferLock;
+    std::vector<char>         buffer;
+    bool                      inCallback{ false };
+    size_t                    callbackLimit{ 0 };
+    juce::int64               position{ 0 };
+    std::atomic<int>          notify{ NOTIFY_ON_CHAR };
+    std::atomic<char>         notifyChar{ 0 };
+
+    JUCE_DECLARE_NON_COPYABLE( SerialPortInputStream )
 };
 
+/// Bytes to a SerialPort. Unbuffered: write() hands the bytes to the device before it returns,
+/// so flush() has nothing to do.
 class SerialPortOutputStream : public juce::OutputStream
 {
 public:
-    explicit SerialPortOutputStream( SerialPort* ) {}
+    explicit SerialPortOutputStream( SerialPort* port );
     ~SerialPortOutputStream() override = default;
 
     // juce::OutputStream
     void        flush() override {}
     bool        setPosition( juce::int64 ) override { return false; }
-    juce::int64 getPosition() override { return 0; }
-    bool        write( const void*, size_t ) override { return false; }
+    juce::int64 getPosition() override { return position; }
+    bool        write( const void* data, size_t numBytes ) override;
+
+private:
+    SerialPort* port;
+    juce::int64 position{ 0 };
+
+    JUCE_DECLARE_NON_COPYABLE( SerialPortOutputStream )
 };
 
-#endif // JUCE_SERIALPORT_STUB_H_INCLUDED
+#endif // JUCE_SERIALPORT_H_INCLUDED
