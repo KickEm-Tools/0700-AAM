@@ -21,6 +21,7 @@
 
 #include "keyboard_detector.h"
 #include "keyboard_signals.h"
+#include "contracts/dcl/dcl_contracts_helper.h"
 
 namespace contracts
 {
@@ -179,6 +180,7 @@ namespace contracts
         if( shiftBtnState != mod.isShiftDown() )
         {
             shiftBtnState = mod.isShiftDown();
+            contracts::DclContractsHelper::setShiftPressed( shiftBtnState ); // what isShiftPressed() reads
             CPktMgr::HWMsg_t hwMsg;
             hwMsg.data.push_back( (juce::int8)contracts::DeviceControlContracts::EN_SHIFT );
             hwMsg.data.push_back( shiftBtnState ? (juce::int8)contracts::DeviceControlContracts::BTN_RELEASED : (juce::int8)contracts::DeviceControlContracts::BTN_PRESSED ); // Key Released/Pressed (in case of pad butto

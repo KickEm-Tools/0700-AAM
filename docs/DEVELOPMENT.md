@@ -360,11 +360,11 @@ Notes on the tables:
 
 - `EN_SYS_RECONNECT` and `EN_SYS_SHUTDOWN` are handled inside the app (8.5) and never sent.
 - MIDI (5) and CV (6) are defined packet types, but nothing in Kick sends or handles them.
-- **SHIFT (31) is stored where nothing reads it.** The reader stores SHIFT's state in
-  `Controls::shiftBtnState` (`input_events.cpp`). `DclContractsHelper::isShiftPressed()` reads
-  `contracts::shiftBtnState`, which nothing on this path sets. Over the wire, with SHIFT held,
-  `isShiftPressed()` stays false, so SHIFT + pad and the other SHIFT functions never trigger
-  from a control surface.
+- **SHIFT (31).** The reader stores its state with `DclContractsHelper::setShiftPressed()`
+  (pressed, long press and double click count as held), and `isShiftPressed()` reads it; the
+  desktop keyboard map sets the same state. Before `fix/shift-state` the reader wrote a separate
+  `Controls::shiftBtnState` that nothing read, so no SHIFT function triggered from a control
+  surface.
 
 ### 8.3 Handshake
 
