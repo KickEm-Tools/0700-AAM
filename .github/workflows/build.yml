@@ -1,5 +1,6 @@
 # Builds the Kick application on macOS, Linux x86_64 and Linux arm64 (the device binary, KT_Kick).
-# See docs/DEVELOPMENT.md.
+# The arm64 job builds in a debian:bookworm container (glibc 2.36), so its KT_Kick-linux-arm64
+# artifact runs on Debian 12 and later. See docs/DEVELOPMENT.md, section 6.
 name: build
 
 on:
@@ -24,28 +25,53 @@ env:
     libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev
     libxrandr-dev libxrender-dev libwebkit2gtk-4.1-dev libglu1-mesa-dev mesa-common-dev
     libserial-dev
+  # The same for the debian:bookworm container, which starts bare: git and certificates for the
+  # checkout and CPM, python3 for the manifest, zstd for the cache. WebKit is left out (not
+  # linked); libxi-dev is listed because the JUCE multitouch patch includes XInput2.h (on Ubuntu
+  # the WebKit packages pull it in).
+  CONTAINER_PACKAGES: >-
+    ca-certificates git python3 zstd
+    gcc g++ make cmake ninja-build pkg-config file
+    libasound2-dev libjack-jackd2-dev libcurl4-openssl-dev libfreetype6-dev
+    libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev libxi-dev
+    libxrandr-dev libxrender-dev libglu1-mesa-dev mesa-common-dev
+    libserial-dev
 
 jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
+    # Empty for the jobs that build on the runner itself.
+    container: ${{ matrix.container }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: Kick (macOS)
-            runner: macos-14
+            # macos-14 jobs were often never picked up ("not acquired by Runner of type hosted
+            # even after multiple attempts").
+            runner: macos-15
             os: macos
           - name: Kick (Linux x86_64)
             runner: ubuntu-24.04
             os: linux
           - name: KT_Kick (Linux arm64)
             runner: ubuntu-24.04-arm
+            # Debian 12, glibc 2.36: a binary linked on Ubuntu 24.04 (glibc 2.39, libmvec) does
+            # not start on Debian 12, which KickEmulator's faithful mode runs.
+            container: debian:bookworm
             os: linux
             package: KT_Kick-linux-arm64
 
     steps:
+      # Before the checkout, so that it is a git clone (CPM and the manifest use git).
+      - name: Install packages (container)
+        if: matrix.container
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $CONTAINER_PACKAGES
+
       - uses: actions/checkout@v5
 
       - name: Dependency versions
@@ -67,7 +93,7 @@ jobs:
           key: cpm-${{ runner.os }}-cpm${{ steps.versions.outputs.cpm }}-juce${{ steps.versions.outputs.juce }}-${{ hashFiles('Kick/patches/juce_multitouch_*.patch') }}
 
       - name: Install packages (Linux)
-        if: matrix.os == 'linux'
+        if: matrix.os == 'linux' && !matrix.container
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $LINUX_PACKAGES
@@ -84,19 +110,35 @@ jobs:
         if: matrix.os == 'linux'
         run: cmake -S Kick -B Kick/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DTIMESTAMP=OFF
 
-      - name: Build
+      # -O3 -flto takes about 2.5 GB per GCC job, so on Linux the job count is also capped by
+      # memory (ubuntu-24.04-arm: 4 CPUs, 16 GB: 4 jobs). macOS keeps one job per CPU (macos-15: 3).
+      - name: Parallel jobs
         shell: bash
         run: |
-          jobs=$( (nproc || sysctl -n hw.ncpu) 2>/dev/null )
-          cmake --build Kick/build --target Kick --parallel "$jobs"
+          if [ "${{ matrix.os }}" = macos ]; then
+            jobs=$(sysctl -n hw.ncpu)
+            echo "$jobs CPUs, $(( $(sysctl -n hw.memsize) / 1048576 )) MB"
+          else
+            cpus=$(nproc)
+            mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+            by_mem=$(( mem_kb / 2500000 ))
+            [ "$by_mem" -ge 1 ] || by_mem=1
+            jobs=$(( cpus < by_mem ? cpus : by_mem ))
+            echo "$cpus CPUs, $(( mem_kb / 1024 )) MB"
+          fi
+          echo "building with $jobs jobs"
+          echo "JOBS=$jobs" >> "$GITHUB_ENV"
+
+      - name: Build
+        shell: bash
+        run: cmake --build Kick/build --target Kick --parallel "$JOBS"
 
       # The control-surface protocol round trip and juce_serialport against a pty
       # (docs/DEVELOPMENT.md, section 8).
       - name: Link tests
         shell: bash
         run: |
-          jobs=$( (nproc || sysctl -n hw.ncpu) 2>/dev/null )
-          cmake --build Kick/build --target kick_protocol_roundtrip kick_serialport_pty_test --parallel "$jobs"
+          cmake --build Kick/build --target kick_protocol_roundtrip kick_serialport_pty_test --parallel "$JOBS"
           cd Kick/build && ctest --output-on-failure -R '^kick_'
 
       - name: Check the binary
@@ -123,13 +165,19 @@ jobs:
           cp -R Kick/assets Kick/templates Kick/demos "$out/"
           ldd "$out/KT_Kick" | awk '{print $1}' | sort > "$out/shared-libraries.txt"
           python3 - "$out/manifest.json" <<'PY'
-          import json, os, platform, subprocess, sys, datetime
+          import json, os, platform, re, subprocess, sys, datetime
           def run(*cmd):
               return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
           out = sys.argv[1]
+          container = os.environ.get("CONTAINER_IMAGE") or None
+          # The newest GLIBC_x.y symbol version the binary needs: the oldest glibc it starts on.
+          with open(os.path.join(os.path.dirname(out), "KT_Kick"), "rb") as f:
+              needed = {tuple(map(int, m.groups())) for m in re.finditer(rb"GLIBC_(\d+)\.(\d+)\b", f.read())}
           manifest = {
               "name": "KT_Kick",
-              "description": "Kick app built natively for Linux arm64 (not a Buildroot SDK build)",
+              "description": "Kick app built for Linux arm64"
+                             + (f" in a {container} container" if container else " natively")
+                             + " (not a Buildroot SDK build)",
               "repository": os.environ["GITHUB_REPOSITORY"],
               "git_ref": os.environ["GITHUB_REF"],
               "git_ref_name": os.environ["GITHUB_REF_NAME"],
@@ -140,9 +188,12 @@ jobs:
               "build_type": "Release",
               "compiler": run("c++", "--version").splitlines()[0],
               "cmake": run("cmake", "--version").splitlines()[0],
-              "runner_image": f'{os.environ.get("ImageOS", "")} {os.environ.get("ImageVersion", "")}'.strip(),
+              "runner": os.environ["RUNNER_LABEL"],
+              "runner_image": f'{os.environ.get("ImageOS", "")} {os.environ.get("ImageVersion", "")}'.strip() or None,
+              "container_image": container,
               "os": run("sh", "-c", ". /etc/os-release && echo $PRETTY_NAME"),
               "glibc": platform.libc_ver()[1],
+              "glibc_required": "%d.%d" % max(needed) if needed else None,
               "arch": platform.machine(),
               "juce": os.environ["JUCE_VERSION"],
               "install": {
@@ -164,6 +215,8 @@ jobs:
           ls -l dist
         env:
           JUCE_VERSION: ${{ steps.versions.outputs.juce }}
+          RUNNER_LABEL: ${{ matrix.runner }}
+          CONTAINER_IMAGE: ${{ matrix.container }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
       - name: Upload ${{ matrix.package }}
