@@ -69,19 +69,40 @@ namespace mt
             _metronome = nullptr;
         }
 
+        // True while a RECORD / OVERDUB take runs (set by MTAudioManager).
+        std::function<bool()> isRecording = []() { return false; };
+
         void triggerBar()
         {
             //DBG( "Bar: " << juce::String( juce::Time::getMillisecondCounterHiRes() ) );
-            if( _metronome && _met.enabled() )
-                _metronome->noteOn( 0, 127 );
+            if( shouldClick() )
+                _metronome->noteOn( 0, velocity( 127 ) );
         }
 
         void triggerBeat()
         {
             //DBG( "Beat: " << juce::String( juce::Time::getMillisecondCounterHiRes() ) );
-            if( _metronome && _met.enabled() )
-                _metronome->noteOn( 1, 64 );
+            if( shouldClick() )
+                _metronome->noteOn( 1, velocity( 64 ) );
         }
+
+    private:
+        // The METRONOME dialog's MODE (RECORD / PLAY / RECORD + PLAY) and LEVEL (0..127 stored as a
+        // 0..1 gain) were stored but not used: the click sounded whenever it was enabled, at a fixed level.
+        bool shouldClick()
+        {
+            if( !_metronome || !_met.enabled() )
+                return false;
+            const bool rec = isRecording();
+            switch( _met.mode() )
+            {
+                case MTMetronomeMode::MET_RECORD: return rec;
+                case MTMetronomeMode::MET_PLAY: return !rec;
+                default: return true; // MET_RECORD_PLAY
+            }
+        }
+
+        int velocity( int Full ) { return juce::jlimit( 1, 127, juce::roundToInt( (float)Full * _met.gain() ) ); }
 
     private:
     private:
