@@ -324,6 +324,11 @@ namespace mt
                         // Trigger note now.
                         midiMsgs.insert( -1, juce::MidiMessage::noteOn( MidiChannel, noteNo, (juce::uint8)noteVelocity ) );
 
+                        // KICK_LOG_NOTES=1 logs every note the sequencer plays (read once; unset, nothing).
+                        static const bool logNotes = juce::SystemStats::getEnvironmentVariable( "KICK_LOG_NOTES", {} ) == "1";
+                        if( logNotes )
+                            juce::Logger::writeToLog( "Note: track '" + getName() + "' tick " + juce::String( pos ) + " pos " + juce::String( posOnTrack ) + " note " + juce::String( noteNo ) + " velocity " + juce::String( noteVelocity ) + " id " + juce::String( it->id.get() ) );
+
                         // Check Ratchet
                         auto parts = (int)( it->ratchet.get() );
                         if( 1 < parts )
