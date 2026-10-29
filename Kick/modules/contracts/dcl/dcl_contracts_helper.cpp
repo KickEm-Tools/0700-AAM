@@ -33,6 +33,7 @@ namespace contracts
     std::atomic<bool> fullLevelState{ false };
 
     bool DclContractsHelper::isShiftPressed() { return shiftBtnState.load(); }
+    void DclContractsHelper::setShiftPressed( bool state ) { shiftBtnState.store( state ); }
     void DclContractsHelper::setHalfLevel( bool state ) { halfLevelState.store( state ); }
     bool DclContractsHelper::isHalfLevel() { return halfLevelState.load(); }
     void DclContractsHelper::setFullLevel( bool state ) { fullLevelState.store( state ); }

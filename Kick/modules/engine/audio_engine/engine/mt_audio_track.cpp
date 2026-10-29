@@ -77,6 +77,10 @@ namespace mt
         // Connect handler to length change handler.
         lengthChangeHandler();
         progChangeHandler();
+
+        // The level of a loaded track: valueTreePropertyChanged only sees later edits, so without
+        // this a saved track level was ignored (velocity x 1.0) until the level was touched.
+        levelScaler = ( level.get() * MIDI::SCALER );
     }
 
     void MTTrack::setName( const juce::String& Name )
@@ -323,6 +327,11 @@ namespace mt
 
                         // Trigger note now.
                         midiMsgs.insert( -1, juce::MidiMessage::noteOn( MidiChannel, noteNo, (juce::uint8)noteVelocity ) );
+
+                        // KICK_LOG_NOTES=1 logs every note the sequencer plays (read once; unset, nothing).
+                        static const bool logNotes = juce::SystemStats::getEnvironmentVariable( "KICK_LOG_NOTES", {} ) == "1";
+                        if( logNotes )
+                            juce::Logger::writeToLog( "Note: track '" + getName() + "' tick " + juce::String( pos ) + " pos " + juce::String( posOnTrack ) + " note " + juce::String( noteNo ) + " velocity " + juce::String( noteVelocity ) + " id " + juce::String( it->id.get() ) );
 
                         // Check Ratchet
                         auto parts = (int)( it->ratchet.get() );

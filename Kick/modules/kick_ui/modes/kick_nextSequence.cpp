@@ -550,6 +550,11 @@ namespace kick_ui
         }
     }
 
+    void KickNextSequenceContent::refreshList()
+    {
+        tableView->refresh();
+    }
+
     void KickNextSequenceContent::handleCommand( CPktMgr::HWMsg_t& f_HwMsg )
     {
     }
@@ -635,6 +640,9 @@ namespace kick_ui
     {
         auto seqData   = ae.getSequenceData( ae.getSelectedSequence() );
         auto trackData = ae.getTrackData( ae.getSelectedSequence(), ae.getSelectedTrack() );
+        // A project without sequences has no sequence data: P1-P4 have nothing to edit.
+        if( !seqData && knob >= contracts::DeviceControlContracts::KnobSequence::EN_KNOB_1 && knob <= contracts::DeviceControlContracts::KnobSequence::EN_KNOB_4 )
+            return;
         switch( knob )
         {
             //sequence
@@ -650,6 +658,13 @@ namespace kick_ui
             case contracts::DeviceControlContracts::KnobSequence::EN_KNOB_4:
                 ae.setSequenceLoopPoints( ae.getSelectedSequence(), seqData->loopStart.get(), seqData->loopEnd.get() + value );
                 break;
+            default: break;
+        }
+        // The list showed the old BPM / length until the screen was reopened.
+        if( knob >= contracts::DeviceControlContracts::KnobSequence::EN_KNOB_1 && knob <= contracts::DeviceControlContracts::KnobSequence::EN_KNOB_4 )
+            content.refreshList();
+        switch( knob )
+        {
             case contracts::DeviceControlContracts::KnobSequence::EN_KNOB_5:
                 ae.setSelectedSequence( ae.getSelectedSequence() + value );
                 break;

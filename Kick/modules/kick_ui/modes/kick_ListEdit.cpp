@@ -276,6 +276,7 @@ namespace kick_ui
     {
         auto& rowComp       = tableView->getRowComponents();
         auto  comp1         = dynamic_cast<ListEntry*>( rowComp[0] );
+        if( comp1 == nullptr ) return; // Empty list: nothing to edit.
         auto  elementBounds = comp1->getElementBounds( ( knob - 1 ) % 4 + 1 );
         auto  totalRows     = tableView->getNumRows();
         auto  rows          = tableView->getRowNumbers( 4, ( ( knob - 1 ) / 4 ) + 1, elementBounds.getX(), elementBounds.getWidth(), 128 );

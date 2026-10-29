@@ -50,6 +50,7 @@ namespace contracts
     {
     public:
         static bool isShiftPressed();
+        static void setShiftPressed( bool state ); ///< the serial reader and the desktop keyboard map
         static void setHalfLevel( bool state );
         static bool isHalfLevel();
         static void setFullLevel( bool state );

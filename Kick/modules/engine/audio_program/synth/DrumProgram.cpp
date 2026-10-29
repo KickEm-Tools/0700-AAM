@@ -125,6 +125,8 @@ namespace mt
                     if( auto voice = dynamic_cast<DrumVoice*>( getFreeVoice( Note, notePoly ) ) )
                     {
                         voice->setSlice( soundSlice );
+                        // PAD MIX level and pan of this pad: stored per CLIP, not applied before.
+                        voice->setNoteGainAndPan( (float)pNote->gain.get(), (float)pNote->pan.get() );
                         voice->noteOn( Note, Velocity );
                         addVoiceForPlayback( voice );
                     }
