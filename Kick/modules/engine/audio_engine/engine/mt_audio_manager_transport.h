@@ -69,6 +69,7 @@ namespace mt
 
     private:
         int  startPlayback( int Seq, bool Resume );
+        void defer( std::function<void()> Action ); // run on the tick thread, between two ticks
 
         void onTick( unsigned int Ticks ) override;
         void onBeat();
@@ -115,6 +116,9 @@ namespace mt
         std::atomic<bool>         threadIsProcessingTick{ false };
         std::atomic<unsigned int> prevTick{ 0 };
         std::atomic<unsigned int> curTick{ 0 };
+
+        juce::SpinLock                     deferredLock;
+        std::vector<std::function<void()>> deferred;
 
         std::thread*        tickProcessingThread;
         juce::WaitableEvent onTickEvent;

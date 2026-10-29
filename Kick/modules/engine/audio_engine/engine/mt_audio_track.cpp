@@ -192,6 +192,10 @@ namespace mt
 
     void MTTrack::play()
     {
+        // play / pause / stop come from the message thread (keys) or the tick thread (NEXT SEQ);
+        // onTick runs on the tick thread under the same lock, and stopAllMidiNotes clears the
+        // queuedNotes it iterates.
+        const juce::ScopedLock sl( lock );
         isPlaying = true;
         // The variables are cleared here and in stop as the workflow may be pause->playstart. if Ui calls stop and resume then it may lead to issues.
         trackPlayhead.clear();
@@ -209,12 +213,14 @@ namespace mt
 
     void MTTrack::pause()
     {
+        const juce::ScopedLock sl( lock );
         isPlaying = false;
         stopAllMidiNotes();
     }
 
     void MTTrack::stop()
     {
+        const juce::ScopedLock sl( lock );
         stopAllMidiNotes();
         isPlaying = false;
         trackPlayhead.clear();
@@ -345,6 +351,7 @@ namespace mt
         if( pProgram->isAudio() )
             return;
 
+        const juce::ScopedLock sl( lock );
         if( Tick < prevTick ) // clock restarted (play() while a tick was in flight)
             prevTick = 0;
         if( playFromStart.load() && Tick > 96 ) // a tick of the previous clock run, after play()
@@ -356,8 +363,6 @@ namespace mt
         trackPlayhead.bnb.tick += diffTick;
         auto isEffectivelyMute   = isTrackEffectivelyMuted();
         auto trackMidiOutChannel = getMidiOutChannel();
-
-        const juce::ScopedLock sl( lock );
 
         // Check if any pending queued note off's are to be sent...
         for( auto p = queuedNotes.begin(); p != queuedNotes.end(); )
