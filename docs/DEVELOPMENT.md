@@ -121,8 +121,10 @@ computer's network or clock. For scripted checks, the audio probe and the other 
 section 9.
 
 Without the control-surface microcontroller there are no pads, buttons or knobs. On macOS (and
-Windows) the keyboard drives them instead (`Kick/modules/contracts/utils/keyboard`). On Linux the
-serial port is a stub (4.2), so not even a unit's control surface is reachable yet.
+Windows) the keyboard drives them instead (`Kick/modules/contracts/utils/keyboard`). On Linux and
+macOS the app talks to a control surface over a serial port: `/dev/ttymxc0` on the unit, or the
+device named by `KICK_SERIAL_DEVICE` (section 8), for example the pseudo-terminal of
+`Kick/tests/fake_mcu.py`.
 
 ## 5. What had to change to make the public release build
 
@@ -181,11 +183,9 @@ and no cmake file. Added:
 
 `Kick/modules/3rdParty/juce_serialport` had no licence and was deleted from the release, but
 `modules/3rdParty/CMakeLists.txt` still lists it and `modules/input_events` uses it to talk to the
-control-surface microcontroller on `/dev/ttymxc0`. Added an API-compatible **stub** at the same
-path: the port never opens, reads are empty, writes are discarded. That is enough on a desktop,
-where there is no `/dev/ttymxc0`. **A device build needs a real implementation**: every Linux
-build prints a compiler message saying so (a `#pragma message`: the project compiles with `-w`,
-which hides `#warning`).
+control-surface microcontroller on `/dev/ttymxc0`. It has been **written again from scratch** at
+the same path, on termios, with the API `input_events` uses (section 8.6). It works on Linux and
+macOS. Windows has no termios, so there the port never opens (a `#pragma message` says so).
 
 ### 5.3 Small Kick fixes
 
@@ -211,7 +211,8 @@ which hides `#warning`).
 - Factory samples, metronome sounds and the General MIDI SoundFont. The demo and template
   projects are empty `<ROOT>` documents.
 - The prebuilt aarch64 SDK (section 3).
-- A real `juce_serialport` (5.2).
+- The control-surface microcontroller's firmware. Its side of the protocol is described in
+  section 8 from what the app expects.
 
 ## 6. Continuous integration
 
@@ -222,6 +223,8 @@ which hides `#warning`).
 | `Kick (macOS)` | `macos-14` | `Kick.app` |
 | `Kick (Linux x86_64)` | `ubuntu-24.04` | `Kick` |
 | `KT_Kick (Linux arm64)` | `ubuntu-24.04-arm` | `Kick`, packaged as the `KT_Kick-linux-arm64` artifact |
+
+Every job also builds and runs the control-surface link tests (8.7) with `ctest`.
 
 The `KT_Kick-linux-arm64` artifact holds `KT_Kick-linux-arm64.tar.gz` (the binary as
 `KT_Kick` plus the `assets/`, `templates/` and `demos/` it reads from `/app` at run time, and
@@ -245,9 +248,270 @@ and JUCE versions and the JUCE patch.
   not open a default device; check the system's output device (or ALSA / JACK on Linux).
 - **JUCE is downloaded again on every configure**: keep the default cache
   (`.3rdPartySourceCache/`) or pass the same `-DCPM_SOURCE_CACHE=<dir>` every time.
-- **"#pragma message: juce_serialport is a stub" on Linux**: expected, see 5.2.
+- **No control surface**: look for `InputEvents: control surface on ...`. No such line means the
+  device file does not exist (on the unit, `/dev/ttymxc0`; otherwise check `KICK_SERIAL_DEVICE`,
+  which must be an absolute path). `could not open` comes after a `SerialPort open:` line with
+  the reason (permissions: the user needs the device's group, often `dialout`). If the line says
+  `open` but nothing reacts, see 8.3: the surface has to answer the handshake.
 
-<!-- Section 8, the control-surface link and its tests, comes with feature/serialport (Kick/tests refers to it). -->
+## 8. The control-surface link
+
+On the unit the keys, pads, knobs, slider, LEDs and pad colours belong to a microcontroller,
+which talks to the app over a serial port. Its firmware is not in this repository. Everything
+below comes from the app's side:
+
+- `ComProtocol/PktMgr` (framing);
+- `Kick/modules/input_events/input_events.cpp` (`HwSerialData`: port, reader, send queue);
+- `KickHome::handleCommand` in `Kick/modules/kick_ui/dialogs/kick_AppHome.cpp` (handshake);
+- the ids in `Kick/modules/contracts/dcl/dcl_contracts.h` (`DeviceControlContracts`) and the
+  message builders in `dcl_contracts_helper.cpp`.
+
+It is checked by `kick_protocol_roundtrip` and the wire runs in 8.7.
+
+### 8.1 The port
+
+- **Device and settings.** `/dev/ttymxc0`, 230400 baud, 8 data bits, no parity, 1 stop bit, no
+  flow control, raw.
+- **When it opens.** `Controls::InputEvents::initialize()` opens it once at start-up (from
+  `KickDeviceAdapter` in `apps/kick`). It opens only if the device file exists and
+  `SerialPort::getSerialPortPaths()` lists at least one port.
+- **`KICK_SERIAL_DEVICE=<absolute path>`** opens another device with the same settings and the
+  same handshake: a USB serial adapter, or a pseudo-terminal. A path given this way does not have
+  to be listed by `getSerialPortPaths()`. When the variable is unset, nothing changes.
+- **Log line.** The app logs one line for the port:
+
+  ```
+  InputEvents: control surface on /dev/ttymxc0 (default), 230400 8N1, no flow control: open
+  ```
+
+  It says `(KICK_SERIAL_DEVICE)` instead when the variable chose the device, and `could not open`
+  after a `SerialPort open: ...` line with the reason when opening failed. A missing
+  `/dev/ttymxc0` logs nothing, as before.
+- **Platforms.** The link is compiled on Linux and macOS. On Windows the port never opens.
+
+### 8.2 Frames
+
+Both directions use the same frame, built by `CPktMgr::BuildAndTransmitPacket`:
+
+| Offset | Content | |
+|---|---|---|
+| 0, 1 | `'M'` `'T'` (`4D 54`) | start bytes |
+| 2 | type | `CPktMgr::enumPacketType`: 0 SYSTEM, 1 BUTTON, 2 LED, 3 PAD, 4 KNOBS, 5 MIDI, 6 CV, 7 SLIDER |
+| 3 | direction | 0 request, 1 response |
+| 4 | command | per type: `SysCmd`, `BtnCmd`, `LedCmd`, `PadCmd`, `KnobCmd`, `SliderCmd` |
+| 5 | size | payload length + 1 (it counts the CRC byte) |
+| 6 .. 5+n | payload | n bytes |
+| 6+n | CRC | see below |
+| 7+n | trailing byte | **surface to app only**, see below |
+
+- **Payload values.** `HWMsg_t::data` is a `std::vector<int>`. Only the low 8 bits of each value
+  go on the wire, and they are read back as 0-255: -1 arrives as 255, and 300 as 44.
+- **CRC.** CRC-8 with polynomial 0x31 (x^8 + x^5 + x^4 + 1), initial value 0xFF, MSB first, no
+  reflection, no final XOR (the CRC-8/NRSC-5 parameters; the check value of `"123456789"` is
+  0xF7). It covers every byte from `'M'` to the last payload byte.
+- **The trailing byte.** The app's reader takes `size + 7` bytes per frame, one more than the
+  frame, and ignores the last one. A surface must therefore send one byte after the CRC.
+  `Kick/tests/fake_mcu.py` sends `'\n'`: the line `f_txData.push_back('\n')`, commented out at the
+  end of `BuildAndTransmitPacket`, suggests this is what the microcontroller does. The app's own
+  frames have no trailing byte.
+- **Example.** `4D 54 00 00 04 02 01 A0 0A` is SYSTEM, request, `EN_SYS_CHECK_COMM_STATUS`,
+  payload `[1]`, CRC 0xA0, trailing `'\n'`.
+- **Size limit.** The app's receive FIFO is 20 bytes (`BUFFER_RX_SIZE`, `ComConfig.hpp`) and
+  `PushByteToRxFifo` does not check bounds. A surface-to-app payload must not exceed 20 bytes.
+  Every packet the app handles has at most 4.
+
+**Packets the app handles (surface to app):**
+
+| Type | Command | Payload | What the app does |
+|---|---|---|---|
+| SYSTEM | `EN_SYS_CHECK_COMM_STATUS` (4) | `[1]` comm init, `[2]` comm live | handshake (8.3) |
+| SYSTEM | `EN_SYS_GET_SW_VER` (1) | `[major, minor]` | stores the surface version |
+| SYSTEM | `EN_SYS_SW_UPDATE` (3) | `[code]` | firmware-update screen |
+| BUTTON | `EN_BTN_STATUS` (0) | `[key, state]` | key: `BtnLedSequence` (PLAY 45, SHIFT 31, ...); state: 0 released, 1 pressed, 2 long press, 3 double click |
+| PAD | `EN_PAD_STATE` (0) | `[pad 0-15, state, velocity, aftertouch]` | |
+| KNOBS | `EN_KNOB_ROTARY` (0) / `EN_KNOB_QLINK` (1) | `[knob, direction, steps]` | knob: 0 centre, 1-16; direction: 0 anticlockwise, 1 clockwise |
+| SLIDER | `EN_SLIDER_TOUCH_INPUT` (0) | `[value]` | |
+
+Responses (direction 1) from the surface are decoded and then ignored.
+
+**Packets the app sends (app to surface):**
+
+| Type | Command | Payload |
+|---|---|---|
+| SYSTEM | `EN_SYS_COMM_INIT` (2) | `[1]` when it connects, `[2]` in answer to comm init |
+| SYSTEM | `EN_SYS_CHECK_COMM_STATUS` (4) | `[2]` in answer to comm live |
+| SYSTEM | `EN_SYS_BPM` (5) | `[high, low]` of the tempo value |
+| SYSTEM | `EN_SYS_SW_UPDATE` (3) | `[code]` |
+| BUTTON | `EN_BTN_STATUS` (0) | `[key, 1]` (`setPlayStateMessage`) |
+| LED | `EN_LED_SET_SINGLE_LED` (0) | `[key, state, colour]`; `[bank key, 1]` for the bank LEDs |
+| LED | `EN_LED_BLINK_SINGLE` (1), `EN_LED_SET_ALL` (2) | defined; `isLEDBlinkMessage` / `isLEDAllMessage` exist |
+| PAD | `EN_PAD_SET_SINGLE_PAD` (1) | `[pad, state, colour]` |
+| PAD | `EN_PAD_SET_ALL_SINGLE_COLOUR` (2) | `[state, colour]` |
+| PAD | `EN_PAD_SET_ALL_MULTI_COLOUR` (3) | `[state, 16 colours]`: 17 bytes |
+| PAD | `EN_PAD_SETTINGS` (4) | as given, for example `[16, 4, 4, 4]` at start-up |
+| PAD | `EN_PAD_COLOR_MODE` (5), `EN_PAD_SET_AFTER_TOUCH` (7) | `[value]` |
+| PAD | `EN_PAD_SET_COLOUR_STATE` (6) | `[n colours, n states]`: 32 bytes for 16 pads |
+| PAD | `EN_PAD_SET_BLINKING` (8) | `[pad, state, on colour, off colour]` |
+| PAD | `EN_PAD_SET_STEP_SINGLE_PAD` (9) | `[pad, state, colour, velocity]` |
+| PAD | `EN_PAD_SET_STEP_ALL_PAD` (10) | `[state, 16 colours, 16 velocities]`: 33 bytes, the largest frame (40 bytes) |
+| SLIDER | `EN_SLIDER_BAR_LED` (1), `EN_SLIDER_LEVEL_LED` (2) | `[percent]` |
+
+Notes on the tables:
+
+- `EN_SYS_RECONNECT` and `EN_SYS_SHUTDOWN` are handled inside the app (8.5) and never sent.
+- MIDI (5) and CV (6) are defined packet types, but nothing in Kick sends or handles them.
+- **SHIFT (31) is stored where nothing reads it.** The reader stores SHIFT's state in
+  `Controls::shiftBtnState` (`input_events.cpp`). `DclContractsHelper::isShiftPressed()` reads
+  `contracts::shiftBtnState`, which nothing on this path sets. Over the wire, with SHIFT held,
+  `isShiftPressed()` stays false, so SHIFT + pad and the other SHIFT functions never trigger
+  from a control surface.
+
+### 8.3 Handshake
+
+| # | Direction | Frame | App log |
+|---|---|---|---|
+| 1 | app to surface | SYSTEM `EN_SYS_COMM_INIT` `[1]` (`EN_SYS_COMM_CONNECTED`), as soon as the port is open | |
+| 2 | surface to app | SYSTEM `EN_SYS_CHECK_COMM_STATUS` `[1]` ("comm init") | ` Data[0] : 1 Cmd : 4 type : 0` |
+| 3 | app to surface | SYSTEM `EN_SYS_COMM_INIT` `[2]` | `Send Comm Init` |
+| 4 | surface to app | SYSTEM `EN_SYS_CHECK_COMM_STATUS` `[2]` ("comm live") | ` Data[0] : 2 Cmd : 4 type : 0` |
+| 5 | app to surface | SYSTEM `EN_SYS_CHECK_COMM_STATUS` `[2]` | `Send Comm Live` |
+
+Timing and retries:
+
+- **The app keeps no state and runs no timers.** It sends step 1 once per `connect()` and
+  answers steps 2 and 4 each time they arrive.
+- **Retries are the surface's job.** The answers come from `KickHome::handleCommand`, so a comm
+  init or comm live that arrives before the home screen exists gets no answer. The surface must
+  repeat steps 2 and 4 until answered. `fake_mcu.py` repeats them every second.
+- **Measured.** No retry was needed in either run below; the times are from step 1 to the app's
+  answer to comm live:
+
+  | Run | Comm init answered | Comm live answered | LIVE |
+  |---|---|---|---|
+  | Plain app on macOS (8.7) | 0.44 s (the app was still starting) | 0.03 s | 0.47 s |
+  | Linux arm64 build in a Debian container, through `/dev/ttymxc0` | 0.11 s | 0.003 s | 0.11 s |
+- **Nothing waits for LIVE.** Keys, pads and knobs are handled whether or not the handshake
+  happened. `KickHome` acts on keys only once a project is loaded.
+- **Logging.** The app logs every request it receives, as ` Data[0] : <d0> Cmd : <cmd> type :
+  <type>`.
+
+### 8.4 What the reader does with imperfect input
+
+The reader is `HwSerialData::changeListenerCallback`. It runs on the message thread, once per
+change notification from the serial input stream:
+
+1. **Fewer than 6 bytes buffered:** it returns and leaves them in the stream.
+2. **Otherwise it reads everything buffered** and walks it frame by frame. Each frame must start
+   with `'M'` `'T'` and be complete (`size + 7` bytes). At the first one that is not, it stops,
+   and **the rest of that read is discarded**.
+3. **Complete frames** go through `CPktMgr::PushByteToRxFifo`, all but the trailing byte.
+   - CRC matches: the frame is dispatched (requests only).
+   - CRC does not match: the frame is dropped silently. `Data Frame Error` is logged only in
+     builds with `DEBUG_PRINTS`.
+
+Consequences, each checked by `kick_protocol_roundtrip`:
+
+- **Two frames in one read:** both dispatched.
+- **No trailing byte:** a lone frame is too short and is dropped. In two back-to-back frames the
+  first is taken, and its "trailing byte" is the second frame's `'M'`, so the second is lost.
+- **Bad CRC:** that frame is lost, and the next good frame is fine.
+- **A frame split across two notifications** (6 or more bytes, but not all of it): the first part
+  is read and dropped. The rest then starts the next read without `'M'`, so the frame after it is
+  lost too. A pty usually delivers a write in one piece; a UART at 230400 baud may not.
+- **Garbage before a frame,** in the same read: the whole read is dropped. Garbage between frames
+  drops everything after it in that read.
+- **A frame with an empty payload** (size 1) never completes. The bytes it left in `CPktMgr`'s
+  partial-frame buffer are not cleared by `ClearReceiver()`, so the next good frame fails its CRC
+  as well. That buffer is a function-level `static`, shared by every `CPktMgr` in the process.
+- **A payload over 20 bytes** writes past the receive FIFO.
+- **A stream that grows during the callback.** The reader asks the stream for its length three
+  times: to size its buffer, to record the length, and in the `read()` call itself. A stream that
+  grew in between would make `read()` write past the buffer. `juce_serialport` prevents this:
+  while a listener runs, the length it sees is fixed (8.6).
+
+### 8.5 When `reconnect()` runs
+
+- **The only trigger.** `Controls::InputEvents::reconnect()` runs only when the app is asked to
+  send SYSTEM `EN_SYS_RECONNECT` (`DclContractsHelper::reconnectMessage()`). In this tree only
+  `apps/kick_device_control_test` sends it. Nothing calls it on a read error, a hang-up or a
+  timeout.
+- **Shutdown.** `EN_SYS_SHUTDOWN` calls `shutdown()`, which destroys the link.
+- **What it does.** `HwSerialData::reconnect()` is `close()` then `connect()`:
+  - `close()` closes the port and stops the send thread;
+  - `connect()` does not start the send thread again.
+
+  So after a reconnect, frames are queued but never sent, including the new step 1 of the
+  handshake. This is to be confirmed and fixed with the fault tests (`/goal-serial` phase 5).
+- **Hang-up.** When the other end goes away (a pty master closes, a USB adapter is unplugged), the
+  serial port's reader logs `SerialPort read: <path>: end of file; reader stopped` and stops. The
+  app keeps the port open and receives nothing more until something calls `reconnect()`.
+
+### 8.6 `juce_serialport`
+
+`Kick/modules/3rdParty/juce_serialport` has these parts:
+
+- **`SerialPort`**
+  - `open()` uses `O_RDWR | O_NOCTTY | O_NONBLOCK`, sets raw mode (`cfmakeraw`,
+    `CLOCAL | CREAD`, `VMIN 0`, `VTIME 0`) and flushes what the driver had buffered.
+  - `setConfig()` sets the baud rate, 5-8 data bits, parity (mark and space only where `CMSPAR`
+    exists), 1 or 2 stop bits (termios has no 1.5) and flow control. `getConfig()` reads back
+    what the device accepted.
+  - A rate with a `B` constant is set with `cfset[io]speed`. 230400 is `B230400` on Linux and
+    macOS.
+  - On macOS any other rate is set with the `IOSSIOSPEED` ioctl, all or nothing. A pty refuses
+    it. On Linux other rates are refused.
+- **`SerialPortInputStream`**
+  - A reader thread waits in `poll()`, appends what `read()` returns to a buffer, and notifies
+    `ChangeListener`s on the message thread (`NOTIFY_ALWAYS`, `NOTIFY_ON_CHAR`, `NOTIFY_OFF`).
+  - While a listener runs, `getTotalLength()` and `read()` on the message thread see only the
+    bytes that had arrived when the callback started. Newer bytes trigger another callback.
+  - It stops, and reports, when the other end hangs up. `close()` wakes it through a pipe.
+- **`SerialPortOutputStream`** is unbuffered. `write()` waits with `poll(POLLOUT)`, up to 1 s per
+  stall, and `flush()` does nothing.
+- **`getSerialPortPaths()`** lists `/dev/ttyS*`, `ttyUSB*`, `ttyACM*`, `ttyAMA*`, `ttymxc*`,
+  `ttyLP*` and `rfcomm*` on Linux, and `/dev/cu.*` and `tty.*` on macOS.
+- **Errors and state changes** go to the `DebugFunction` passed to the constructor.
+  `input_events` passes one that logs them.
+
+### 8.7 Testing without a unit
+
+**Unit tests.** Both are console targets under `Kick/tests`, built unless
+`-DKICK_LINK_TESTS=OFF`, and run in CI:
+
+```sh
+cmake --build Kick/build --target kick_protocol_roundtrip kick_serialport_pty_test
+ctest --test-dir Kick/build --output-on-failure -R '^kick_'
+```
+
+- `kick_protocol_roundtrip` covers:
+  - every packet type in both directions, including the 17-, 32- and 33-byte pad sets;
+  - the frame layout, and the CRC against an independent implementation;
+  - the reader cases in 8.4.
+- `kick_serialport_pty_test` runs `juce_serialport` against a `posix_openpt` pair:
+  - open and configuration, notifications on the message thread, the fixed length inside a
+    callback;
+  - a 256 KiB write, close and reopen, and the other end hanging up.
+
+  A Linux pty forces 8 data bits and no parity, so the test checks only the rate and stop bits
+  there.
+
+**The whole app against a fake surface.** `Kick/tests/fake_mcu.py` (Python 3, standard library
+only) plays the microcontroller. It answers the handshake, sends the keys, pads, knobs and slider
+moves listed in `--steps`, and logs every frame with a hex dump. `--capture PREFIX` writes the raw
+bytes of each direction to files. It reads the ids from this tree.
+
+```sh
+Kick/tests/fake_mcu.py --pty --capture /tmp/kick
+#   FakeMCU: [   0.003s] listening on /dev/ttys012
+cd Kick/build && KICK_SERIAL_DEVICE=/dev/ttys012 ./Kick.app/Contents/MacOS/Kick
+```
+
+`tap:KNOB_ENTER` in `--steps` opens the project selected on the start screen. After that, keys such as STOP,
+BANK_B and HALF_LEVEL get their LED frames back. On Linux, `--link /dev/ttymxc0` also makes the
+pty appear as the unit's own port, so the app connects with `KICK_SERIAL_DEVICE` unset.
+
+Kick allows one instance per machine (`moreThanOneInstanceAllowed()` is false). A second one
+started while another runs exits at once, with no log.
 
 ## 9. Extension points for testing without a unit
 

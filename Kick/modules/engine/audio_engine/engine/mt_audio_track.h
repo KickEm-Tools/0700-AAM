@@ -98,6 +98,19 @@ namespace mt
         /*void addMidiNote( int NoteNumber, int Velocity );
         void stopMidiNote( int NoteNumber );*/
         void stopAllMidiNotes();
+
+        // Live note recording (RECORD / OVERDUB keys, see MTAudioTransportManager::setRecordMode).
+        // A take runs from startRecording() to stopRecording(); live note on/off pairs are added at
+        // the track position they were played. Replace (RECORD): the notes the track had at the
+        // punch-in are not played while the take runs, and those the playhead passed are erased
+        // when it ends. Otherwise (OVERDUB) notes are only added.
+        void startRecording( bool Replace );
+        void stopRecording();
+        void recordMidiMessage( const juce::MidiMessage& Msg );
+        bool isRecordingNotes() const noexcept { return recording.load(); }
+
+        // Timing Correct for recorded note starts (the UI's TC setting; identity when unset).
+        static inline std::function<int( int StartTick )> recordTimingCorrect;
         int  processIncomingMidiMessage( const juce::MidiMessage& Msg );
         int  processIncomingMidiMessage( const MTMidiMessage& Msg );
 
@@ -149,6 +162,16 @@ namespace mt
         juce::CriticalSection lock;
 
         std::atomic<bool>         soloMuted{ false };
+        std::atomic<bool>         playFromStart{ false }; // play(): the first tick also plays position 0
+
+        // Live recording state (message thread writes, tick thread reads the atomics).
+        std::atomic<bool>                            recording{ false };
+        std::atomic<bool>                            replacing{ false };
+        std::atomic<int>                             takeLastOldId{ 0 }; // note ids up to this existed at the punch-in
+        std::atomic<unsigned int>                    takeTicks{ 0 }; // ticks played since the punch-in
+        unsigned int                                 takeStart{ 0 }; // first track position the take plays
+        std::map<int, std::pair<unsigned int, int>> heldNotes; // note number -> (start, velocity)
+
         std::atomic<unsigned int> lengthInTicks{ 0 };
         std::atomic<double>       lengthFactor{ 0 };
         //unsigned int              count;

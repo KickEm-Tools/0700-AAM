@@ -115,6 +115,7 @@
     #include "modes/kick_trackMute.h"
     #include "modes/kick_padMute.h"
     #include "modes/kick_nextSequence.h"
+    #include "modes/kick_TimingCorrect.h"
     #include "modes/kick_song.h"
     #include "modes/mixers/kick_MixerTabView.h"
     #include "modes/mixers/kick_MixerHandlerInterface.h"
