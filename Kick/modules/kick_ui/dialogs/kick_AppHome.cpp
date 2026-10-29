@@ -37,6 +37,21 @@ namespace kick_ui
 
     sigslot::signal<Screen, void*> signals::onScreenData = {};
 
+    namespace
+    {
+        // RECORD / OVERDUB key LEDs follow the armed record mode.
+        void showRecordLeds( mt::MTAudioInterface& ae )
+        {
+            const bool armed   = ae.isSequenceRecordArmed();
+            const bool overdub = ae.isSequenceRecordOverdub();
+            auto       led     = []( int Id, bool On ) {
+                contracts::DclSignals::sendCommandToDcl( On ? contracts::DclContractsHelper::setLEDONMessage( Id ) : contracts::DclContractsHelper::setLEDOFFMessage( Id ) );
+            };
+            led( contracts::DeviceControlContracts::EN_RECORD, armed && !overdub );
+            led( contracts::DeviceControlContracts::EN_OVERDUB, armed && overdub );
+        }
+    }
+
     class TempScreen
         : public IScreen
         , public juce::Component
@@ -173,6 +188,9 @@ namespace kick_ui
         contracts::DclSignals::hardwareInputTriggered.connect( [&]( CPktMgr::HWMsg_t& f_HwMsg ) {
             this->handleCommand( f_HwMsg );
         } );
+
+        // RECORD / OVERDUB takes snap note starts with Timing Correct (TC, ON/OFF) when it is on.
+        mt::getAudioInterface().setRecordTimingCorrect( []( int Tick ) { return TimingCorrect::correct( Tick ); } );
 
         // Function to add screens.
         auto screenAdder = [&]( Screen Type, std::unique_ptr<IScreen> Screen ) {
@@ -432,6 +450,28 @@ namespace kick_ui
                             ae.saveProject();
                             break;
 
+                        // Transport keys with no per-screen handler (PLAY / STOP / PLAY START are
+                        // handled by each screen; the LOOPER uses RECORD / OVERDUB for itself).
+                        case contracts::DeviceControlContracts::EN_RECORD:
+                        case contracts::DeviceControlContracts::EN_OVERDUB:
+                            if( getCurrentScreen() != Screen::MenuLooper )
+                            {
+                                ae.setSequenceRecord( true, buttonCode == contracts::DeviceControlContracts::EN_OVERDUB );
+                                showRecordLeds( ae );
+                            }
+                            break;
+                        case contracts::DeviceControlContracts::EN_STOP: // ends a take; also disarms while stopped
+                            if( ae.isSequenceRecordArmed() )
+                            {
+                                ae.setSequenceRecord( false, false );
+                                showRecordLeds( ae );
+                            }
+                            break;
+
+                        // TC and ON/OFF (SHIFT + TC) had no handler.
+                        case contracts::DeviceControlContracts::EN_TC: TimingCorrect::showWindow(); break;
+                        case contracts::DeviceControlContracts::EN_ON_OFF: TimingCorrect::setEnabled( !TimingCorrect::isEnabled() ); break;
+
                         default: break;
                     }
                 }
@@ -456,7 +496,15 @@ namespace kick_ui
                 return;
             }
 
-            if( contracts::DclContractsHelper::isNavigationMessage( f_HwMsg ) && ui::getComponentInFocus() && !contracts::DclContractsHelper::isPadButtonMessage( f_HwMsg ) )
+            // P1-P16 belong to the screen, which assigns them (PAD MIX, TRACK MIX, STEP SEQ...). A
+            // focused control ignores them (KickControlsProcessor::handleCommand: "Nothing to be done
+            // for link knobs"), so routing them there dropped them: in PAD MIX, hitting a pad focuses
+            // its on-screen button and P1 stopped changing the level. Only a modal popup, which
+            // forwards them to its content, keeps them.
+            const bool linkKnob = contracts::DclContractsHelper::isKnobMessage( f_HwMsg ) && contracts::DclContractsHelper::getKnobCode( f_HwMsg ) != contracts::DeviceControlContracts::KnobSequence::EN_KNOB_CENTER;
+            const bool toFocus  = !linkKnob || juce::Component::getCurrentlyModalComponent() != nullptr;
+
+            if( toFocus && contracts::DclContractsHelper::isNavigationMessage( f_HwMsg ) && ui::getComponentInFocus() && !contracts::DclContractsHelper::isPadButtonMessage( f_HwMsg ) )
             {
                 log += " is Navigation message";
                 juce::Logger::writeToLog( log );

@@ -44,6 +44,13 @@ namespace mt
 
     juce::String WifiManager::executeCommand( const juce::String& command )
     {
+        // Never run the unit's network tools (ip, killall, wpa_supplicant, dhclient) on a
+        // system without its wlan0, such as a developer's computer (kick_HardwareProbe.h).
+        if( !hw::isAvailable( hw::Feature::wifi ) )
+        {
+            juce::Logger::writeToLog( "FeatureUnavailable: wifi: command not run: " + command );
+            return {};
+        }
         juce::ChildProcess process;
         process.start( command );
         process.waitForProcessToFinish( -1 );
@@ -97,6 +104,11 @@ namespace mt
         juce::ChildProcess                                childProcess;
 
         DBG( "-------------------------scanning-----------------------" );
+        if( !hw::isAvailable( hw::Feature::wifi ) )
+        {
+            juce::Logger::writeToLog( "FeatureUnavailable: wifi: scan not run: " + command );
+            return _networks;
+        }
         if( childProcess.start( command ) )
         {
             juce::StringArray tempResults;

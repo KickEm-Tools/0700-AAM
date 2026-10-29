@@ -63,6 +63,7 @@
 
     #include "source/mt_ADSR.h"
     #include "source/mt_Filter.h"
+    #include "source/mt_AudioDeviceProbe.h"
     #include "source/mt_AudioDevice.h"
     #include "source/mt_Recorder.h"
 
