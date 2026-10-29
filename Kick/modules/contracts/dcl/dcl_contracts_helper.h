@@ -53,6 +53,8 @@ namespace contracts
         static void setShiftPressed( bool state ); ///< the serial reader and the desktop keyboard map
         static void setHalfLevel( bool state );
         static bool isHalfLevel();
+        static void setFullLevel( bool state );
+        static bool isFullLevel();
         static bool isButtonMessage( const CPktMgr::HWMsg_t& hwMsg );
         static bool isPadButtonMessage( const CPktMgr::HWMsg_t& hwMsg );
         static bool isKnobMessage( const CPktMgr::HWMsg_t& hwMsg );
