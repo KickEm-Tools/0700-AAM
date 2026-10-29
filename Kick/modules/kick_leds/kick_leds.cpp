@@ -64,6 +64,13 @@ namespace kick_ui
             {
                 contracts::DclSignals::sendCommandToDcl( contracts::DclContractsHelper::setMediaControlMessage( contracts::DeviceControlContracts::BtnLedSequence::EN_STOP ) );
             }
+
+            // STOP ends a RECORD / OVERDUB take and disarms it (MTAudioTransportManager::pause / stop).
+            if( mt::TransportState::Playing != State )
+            {
+                contracts::DclSignals::sendCommandToDcl( contracts::DclContractsHelper::setLEDOFFMessage( contracts::DeviceControlContracts::BtnLedSequence::EN_RECORD ) );
+                contracts::DclSignals::sendCommandToDcl( contracts::DclContractsHelper::setLEDOFFMessage( contracts::DeviceControlContracts::BtnLedSequence::EN_OVERDUB ) );
+            }
         } );
 
         signals::onScreenLoaded.connect( [&]( Screen Scrn ) {

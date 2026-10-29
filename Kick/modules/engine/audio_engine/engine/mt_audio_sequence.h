@@ -211,6 +211,7 @@ namespace mt
         std::atomic<unsigned int> pos1_8{ 0 };
         std::atomic<unsigned int> pos1_16{ 0 };
         std::atomic<unsigned int> prevTicks{ 0 };
+        std::atomic<bool>         startPending{ false }; // play() from a bar line: emit the bar / beat signals of the first tick
 
         double lengthFactor{ 1 };
         int    lengthInTicks{ 1 };

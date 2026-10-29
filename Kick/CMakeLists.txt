@@ -21,7 +21,6 @@ option( USE_VALUE_TREE_DEBUGGER "Value Tree Debugger" OFF )
 option( DISABLE_JUCE_MEMORY_LEAK_DETECTION "juce memory" OFF )
 option( AUDIO_DEVELOPMENT "Local development sources for AudIO" OFF )
 option( KICK_VST_PLUGIN "KICK VST Plugin" OFF )
-option( KICK_SIMULATOR "KICK Simulator" OFF )
 option( KICK_PLAYBACK "KICK Audio Playback App" OFF )
 option( KICK_MULTITOUCH "KICK Multitouch demo App" OFF )
 option( DEBUG_TOUCH "Enable mouse cursor" OFF )
@@ -113,6 +112,13 @@ if( TIMESTAMP )
 endif()
 add_subdirectory(modules)
 add_subdirectory(apps)
+
+# Console tests for the control-surface link (docs/DEVELOPMENT.md, section 8).
+option( KICK_LINK_TESTS "Build the control-surface protocol and serial port tests" ON )
+if( KICK_LINK_TESTS )
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
 ##
 ## Add CPack support

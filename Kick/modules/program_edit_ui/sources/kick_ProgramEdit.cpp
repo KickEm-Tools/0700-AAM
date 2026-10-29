@@ -229,7 +229,9 @@ namespace kick_ui
     {
         if( selectedProgram )
         {
-            if( contracts::DclContractsHelper::isPadButtonMessage( f_HwMsg ) || contracts::DclContractsHelper::isKnobMessage( f_HwMsg ) )
+            // Pads only: a Q-Link packet ({knob, direction, steps}) read as a pad played note
+            // <knob> at velocity <steps> and relabelled the selected pad (A02..A05).
+            if( contracts::DclContractsHelper::isPadButtonMessage( f_HwMsg ) )
             {
                 auto&            ae         = mt::getAudioInterface();
                 int              bankOffset = ae.getBankOffset();

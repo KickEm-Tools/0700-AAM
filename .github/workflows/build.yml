@@ -46,7 +46,7 @@ jobs:
             package: KT_Kick-linux-arm64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Dependency versions
         id: versions
@@ -61,7 +61,7 @@ jobs:
       # Kick/CMakeLists.txt puts the CPM cache in <repo>/.3rdPartySourceCache. JUCE is cloned into
       # it and patched there once; the key covers the CPM and JUCE versions and the patch.
       - name: CPM cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .3rdPartySourceCache
           key: cpm-${{ runner.os }}-cpm${{ steps.versions.outputs.cpm }}-juce${{ steps.versions.outputs.juce }}-${{ hashFiles('Kick/patches/juce_multitouch_*.patch') }}
@@ -89,6 +89,15 @@ jobs:
         run: |
           jobs=$( (nproc || sysctl -n hw.ncpu) 2>/dev/null )
           cmake --build Kick/build --target Kick --parallel "$jobs"
+
+      # The control-surface protocol round trip and juce_serialport against a pty
+      # (docs/DEVELOPMENT.md, section 8).
+      - name: Link tests
+        shell: bash
+        run: |
+          jobs=$( (nproc || sysctl -n hw.ncpu) 2>/dev/null )
+          cmake --build Kick/build --target kick_protocol_roundtrip kick_serialport_pty_test --parallel "$jobs"
+          cd Kick/build && ctest --output-on-failure -R '^kick_'
 
       - name: Check the binary
         shell: bash
@@ -159,7 +168,7 @@ jobs:
 
       - name: Upload ${{ matrix.package }}
         if: matrix.package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.package }}
           path: |

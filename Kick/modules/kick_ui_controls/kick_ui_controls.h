@@ -14,7 +14,7 @@
   website:
   license:            AGPLv3
 
-  dependencies:       kick_ui_common, juce_gui_extra, juce_audio_utils, input_events
+  dependencies:       kick_ui_common, juce_gui_extra, juce_audio_utils, input_events, test_control
 
  END_JUCE_MODULE_DECLARATION
 
@@ -29,6 +29,7 @@
     #include <juce_gui_extra/juce_gui_extra.h>
     #include <juce_audio_utils/juce_audio_utils.h>
     #include "contracts/dcl/dcl_contracts.h"
+    #include <test_control/test_control.h>
 
     // Module include files.
     #include "source/kick_Theme.h"
@@ -73,5 +74,6 @@
     #include "source/kick_attachedControls.h"
     #include "source/kick_NoteSelector.h"
     #include "source/kick_IPv4Editor.h"
+    #include "source/kick_FeatureUnavailable.h"
 
 #endif

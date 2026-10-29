@@ -17,11 +17,6 @@ if (KICK_PLAYBACK)
     add_subdirectory(kick_audio)
 endif()
 
-# Software Simulator
-if( KICK_SIMULATOR )
-    add_subdirectory(kickem)
-endif()
-
 # KICK VST plugin
 if( KICK_VST_PLUGIN )
     add_subdirectory(kickvst)
