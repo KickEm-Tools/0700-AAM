@@ -1,0 +1,54 @@
+# Runs the firmware against KickEmulator (https://github.com/KickEm-Tools/KickEmulator): it builds
+# this commit, boots it headless against the emulated front panel and runs the smoke test (PUSH
+# loads the Starter Kit, PLAY four bars, STOP: LED and pad-colour packets over the wire, sound in
+# the audio probe, no clipping, silence after STOP). Evidence (app and panel logs, probe WAV,
+# screenshots) is uploaded as an artifact; the job summary says what each mode cannot tell you.
+# See docs/DEVELOPMENT.md, section 6.
+name: emulator
+
+on:
+  pull_request:
+  push:
+    branches: [main]      # also fills the caches (JUCE, ccache) that pull requests restore from
+  schedule:
+    - cron: "41 3 * * *"  # faithful mode, nightly
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "fast, vm or both"
+        type: choice
+        options: [fast, vm, both]
+        default: fast
+      checks:
+        description: "fast mode checks (smoke transport modes pads sampler_looper overlays serial_faults)"
+        default: smoke
+      runner:
+        description: "fast mode runner (macos-15, macos-14, macos-26)"
+        default: macos-15
+
+permissions:
+  contents: read
+
+concurrency:
+  group: emulator-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast mode: the desktop Kick app on macOS, panel over a pty. Every pull request.
+  fast:
+    if: github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || inputs.mode != 'vm')
+    uses: KickEm-Tools/KickEmulator/.github/workflows/test-firmware.yml@ci/test-firmware
+    with:
+      mode: fast
+      runner: ${{ inputs.runner || 'macos-15' }}
+      checks: ${{ inputs.checks || 'smoke' }}
+      emulator-ref: ci/test-firmware
+
+  # Faithful mode: this commit's Linux arm64 KT_Kick in a QEMU VM (emulated: hosted arm64 runners
+  # have no KVM), started by the unit's own ktkick.service. Nightly on main and on request.
+  vm:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode != 'fast')
+    uses: KickEm-Tools/KickEmulator/.github/workflows/test-firmware.yml@ci/test-firmware
+    with:
+      mode: vm
+      emulator-ref: ci/test-firmware
