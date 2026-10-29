@@ -47,6 +47,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 juce_add_gui_app(${TargetName} 
         PRODUCT_NAME ${TargetName}
         COMPANY_NAME ${TargetCompany}
+        MICROPHONE_PERMISSION_ENABLED TRUE   # macOS: audio input needs a usage description or the app is killed
         REQUIRES_FULL_SCREEN TRUE
 )
 

@@ -101,6 +101,8 @@ namespace QUANTIZE
 namespace EMPTY
 {
     static const juce::ValueTree VTState{};
+    static const juce::String    String{};
+    // EMPTY::SampleBuffer lives in engine/interface/interface.h, where juce_audio_basics is in scope.
 }
 
 namespace CONSTANTS

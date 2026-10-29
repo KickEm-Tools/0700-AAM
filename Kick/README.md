@@ -9,11 +9,13 @@ Bundled third-party code keeps its own license (see below).
 
 ## Building
 
-The build will not work out of the box:
+See [`docs/DEVELOPMENT.md`](../docs/DEVELOPMENT.md) for the commands on macOS, Linux and Linux arm64.
 
-- **Private dependencies are not included.** `3rdParty.cmake` fetches two internal libraries,
-  `AudIO` and `ComProtocol`, that are not part of this release. Point `MT_PLATFORM_GIT_PATH`
-  at your own replacements (`-DMT_PLATFORM_GIT_PATH=<git base url>`) or remove the code that uses them.
+- **AudIO and ComProtocol** are taken from this repository (`../AudIO`, `../ComProtocol`).
+  `3rdParty.cmake` can still fetch them from a git server instead
+  (`-DMT_PLATFORM_GIT_PATH=<git base url>`). Parts of AudIO that Kick needs were not in the
+  release and are reconstructed (`AudIO_juce`, `AudIO_constants`, see `docs/DEVELOPMENT.md`).
+- **`juce_serialport` is a stub**: a device build cannot reach the control surface yet.
 - **No cross-compilation SDK.** Build one from the companion Buildroot tree
   (`make KTKick_defconfig && make sdk`) and pass its `share/buildroot/toolchainfile.cmake`
   as `CMAKE_TOOLCHAIN_FILE`. See `how-to/Kick_Compilation.txt`.

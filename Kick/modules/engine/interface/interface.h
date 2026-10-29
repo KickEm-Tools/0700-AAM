@@ -49,6 +49,12 @@
     #include <common/common.h>
     #include <audio_interface/audio_interface.h>
 
+// Shared empty constants (see also EMPTY::VTState / EMPTY::String in common/source/kick_Constants.h).
+namespace EMPTY
+{
+    static const juce::AudioBuffer<float> SampleBuffer{};
+}
+
     // Module include files...
     #include "source/mt_audio_ids.h"
     #include "source/mt_audio_interface.h"

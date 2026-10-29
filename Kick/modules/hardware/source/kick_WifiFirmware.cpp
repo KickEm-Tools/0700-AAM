@@ -19,6 +19,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+#include <sys/stat.h> // struct stat / stat() in WifiManager::fileExists, on every POSIX platform
+
 #if( JUCE_LINUX || __linux__ )
     #include <iostream>
     #include <fcntl.h>

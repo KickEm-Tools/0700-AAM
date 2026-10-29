@@ -1,0 +1,169 @@
+# Builds the Kick application on macOS, Linux x86_64 and Linux arm64 (the device binary, KT_Kick).
+# See docs/DEVELOPMENT.md.
+name: build
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Packages from Kick/how-to/Kick_Compilation.txt that the app build needs. WebKit is not linked
+  # (JUCE_WEB_BROWSER=0); Ubuntu 24.04 only ships webkit2gtk-4.1.
+  LINUX_PACKAGES: >-
+    gcc g++ make cmake ninja-build pkg-config file
+    libasound2-dev libjack-jackd2-dev libcurl4-openssl-dev libfreetype6-dev
+    libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev
+    libxrandr-dev libxrender-dev libwebkit2gtk-4.1-dev libglu1-mesa-dev mesa-common-dev
+    libserial-dev
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Kick (macOS)
+            runner: macos-14
+            os: macos
+          - name: Kick (Linux x86_64)
+            runner: ubuntu-24.04
+            os: linux
+          - name: KT_Kick (Linux arm64)
+            runner: ubuntu-24.04-arm
+            os: linux
+            package: KT_Kick-linux-arm64
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Dependency versions
+        id: versions
+        shell: bash
+        run: |
+          juce=$(sed -n 's/^set(JUCE_GIT_TAG *\([^ )]*\).*/\1/p' Kick/3rdParty.cmake)
+          cpm=$(sed -n 's/^set(CPM_DOWNLOAD_VERSION *\([^ )]*\).*/\1/p' Kick/get_cpm.cmake)
+          echo "juce=$juce" >> "$GITHUB_OUTPUT"
+          echo "cpm=$cpm" >> "$GITHUB_OUTPUT"
+          echo "JUCE $juce, CPM $cpm"
+
+      # Kick/CMakeLists.txt puts the CPM cache in <repo>/.3rdPartySourceCache. JUCE is cloned into
+      # it and patched there once; the key covers the CPM and JUCE versions and the patch.
+      - name: CPM cache
+        uses: actions/cache@v5
+        with:
+          path: .3rdPartySourceCache
+          key: cpm-${{ runner.os }}-cpm${{ steps.versions.outputs.cpm }}-juce${{ steps.versions.outputs.juce }}-${{ hashFiles('Kick/patches/juce_multitouch_*.patch') }}
+
+      - name: Install packages (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $LINUX_PACKAGES
+
+      - name: Configure (macOS)
+        if: matrix.os == 'macos'
+        env:
+          # juceaide is built in a nested CMake run that only sees the deployment target
+          # through the environment (docs/DEVELOPMENT.md, section 3).
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+        run: cmake -S Kick -B Kick/build -DCMAKE_BUILD_TYPE=Release -DTIMESTAMP=OFF
+
+      - name: Configure (Linux)
+        if: matrix.os == 'linux'
+        run: cmake -S Kick -B Kick/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DTIMESTAMP=OFF
+
+      - name: Build
+        shell: bash
+        run: |
+          jobs=$( (nproc || sysctl -n hw.ncpu) 2>/dev/null )
+          cmake --build Kick/build --target Kick --parallel "$jobs"
+
+      - name: Check the binary
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" = macos ]; then
+            bin=Kick/build/Kick.app/Contents/MacOS/Kick
+          else
+            bin=Kick/build/apps/kick/Kick_artefacts/Release/Kick
+          fi
+          ls -l "$bin"
+          file "$bin"
+          echo "KICK_BIN=$bin" >> "$GITHUB_ENV"
+
+      - name: Package ${{ matrix.package }}
+        if: matrix.package
+        shell: bash
+        run: |
+          pkg="${{ matrix.package }}"
+          out="dist/$pkg"
+          mkdir -p "$out"
+          # On the unit the binary is /usr/bin/KT_Kick and reads /app/{assets,templates,demos}.
+          cp "$KICK_BIN" "$out/KT_Kick"
+          cp -R Kick/assets Kick/templates Kick/demos "$out/"
+          ldd "$out/KT_Kick" | awk '{print $1}' | sort > "$out/shared-libraries.txt"
+          python3 - "$out/manifest.json" <<'PY'
+          import json, os, platform, subprocess, sys, datetime
+          def run(*cmd):
+              return subprocess.run(cmd, capture_output=True, text=True).stdout.strip()
+          out = sys.argv[1]
+          manifest = {
+              "name": "KT_Kick",
+              "description": "Kick app built natively for Linux arm64 (not a Buildroot SDK build)",
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "git_ref": os.environ["GITHUB_REF"],
+              "git_ref_name": os.environ["GITHUB_REF_NAME"],
+              "git_sha": os.environ["GITHUB_SHA"],
+              "pull_request_head_sha": os.environ.get("PR_HEAD_SHA") or None,
+              "workflow_run": f'{os.environ["GITHUB_SERVER_URL"]}/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{os.environ["GITHUB_RUN_ID"]}',
+              "build_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "build_type": "Release",
+              "compiler": run("c++", "--version").splitlines()[0],
+              "cmake": run("cmake", "--version").splitlines()[0],
+              "runner_image": f'{os.environ.get("ImageOS", "")} {os.environ.get("ImageVersion", "")}'.strip(),
+              "os": run("sh", "-c", ". /etc/os-release && echo $PRETTY_NAME"),
+              "glibc": platform.libc_ver()[1],
+              "arch": platform.machine(),
+              "juce": os.environ["JUCE_VERSION"],
+              "install": {
+                  "KT_Kick": "/usr/bin/KT_Kick",
+                  "assets": "/app/assets",
+                  "templates": "/app/templates",
+                  "demos": "/app/demos",
+              },
+              "files": sorted(p for p in os.listdir(os.path.dirname(out)) if p != "manifest.json") + ["manifest.json"],
+          }
+          with open(out, "w") as f:
+              json.dump(manifest, f, indent=2)
+              f.write("\n")
+          PY
+          cat "$out/manifest.json"
+          # A tarball keeps KT_Kick executable (artifact uploads drop file modes).
+          tar -C dist -czf "dist/$pkg.tar.gz" "$pkg"
+          cp "$out/manifest.json" dist/manifest.json
+          ls -l dist
+        env:
+          JUCE_VERSION: ${{ steps.versions.outputs.juce }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+
+      - name: Upload ${{ matrix.package }}
+        if: matrix.package
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.package }}
+          path: |
+            dist/${{ matrix.package }}.tar.gz
+            dist/manifest.json
+          if-no-files-found: error
+          retention-days: 30

@@ -31,7 +31,7 @@ namespace contracts
 {
     
 
-#if defined( _WIN32 ) || defined( _WIN64 )
+#if defined( _WIN32 ) || defined( _WIN64 ) || defined( __APPLE__ ) // desktop builds: drive the control surface from the keyboard
     struct keyPressedDetector : public juce::KeyListener
     {
         juce::Array<int> _keys;
@@ -58,6 +58,6 @@ namespace contracts
         bool keyPressed( const juce::KeyPress& key, juce::Component* originatingComponent ) override { return false;}
         bool keyStateChanged( bool isKeyDown, juce::Component* originatingComponent ) override { return false; };
     };
-#endif // defined( _WIN32 ) || defined( _WIN64 )
+#endif // desktop keyboard detector
     keyPressedDetector& getKeypressDetector();
 }
