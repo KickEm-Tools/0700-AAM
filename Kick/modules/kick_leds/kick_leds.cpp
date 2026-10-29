@@ -348,7 +348,13 @@ namespace kick_ui
 
             contracts::DclSignals::sendCommandToDcl( contracts::DclContractsHelper::
                                                          setPadColorModeMessage( MTIProg ? MTIProg->colourMode.get() : mt::DIM_VELOCITY ) );
-            contracts::DclSignals::sendCommandToDcl( contracts::DclContractsHelper::setLEDONMessage( contracts::DeviceControlContracts::EN_FULL_LEVEL ) );
+            // FULL / HALF LEVEL are toggles (kick_ui PadModifiers), off by default: show their state
+            // rather than always lighting FULL LEVEL, which never applied to the pads.
+            for( auto id : { contracts::DeviceControlContracts::EN_FULL_LEVEL, contracts::DeviceControlContracts::EN_HALF_LEVEL } )
+            {
+                const bool on = id == contracts::DeviceControlContracts::EN_FULL_LEVEL ? contracts::DclContractsHelper::isFullLevel() : contracts::DclContractsHelper::isHalfLevel();
+                contracts::DclSignals::sendCommandToDcl( on ? contracts::DclContractsHelper::setLEDONMessage( id ) : contracts::DclContractsHelper::setLEDOFFMessage( id ) );
+            }
 
             sendPadSettings();
             projectLoadCompleted = true;
