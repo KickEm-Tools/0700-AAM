@@ -85,6 +85,7 @@ namespace kick_ui
         void onStop();
         void handleCommand( CPktMgr::HWMsg_t& );
         void enableRowSelection( bool State );
+        void refreshList(); // redraw the sequence rows (BPM, length) after a Q-Link edit
 
     private:
         mt::MTAudioInterface&                            ae;

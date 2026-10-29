@@ -80,6 +80,7 @@ namespace kick_ui
     {
         auto& rowComp       = getRowComponents();
         auto  comp1         = dynamic_cast<ProgramMixerDisplay*>( rowComp[0] );
+        if( comp1 == nullptr ) return; // No rows to edit, e.g. a project without programs.
         auto  elementBounds = comp1->getElementBounds( ( knob - 1 ) % 4 + 1 );
         auto  numRows       = getNumRows();
         auto  rows          = getRowNumbers( 3, ( ( knob - 1 ) / 4 ) + 1, elementBounds.getX(), elementBounds.getWidth(), 50 );
