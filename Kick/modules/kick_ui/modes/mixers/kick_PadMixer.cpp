@@ -112,8 +112,12 @@ namespace kick_ui
     {
         switch( ID )
         {
-            case 0: levelSlider.knobRotated( Value ); break;
-            case 1: panSlider.knobRotated( Value ); break;
+            // Value is the knob's signed detent count. One detent is one step of the slider
+            // (0.01 of the 0..1 level, 0.01 of the -1..1 pan), as for the CW / CCW keys
+            // (KickControlsProcessor). Adding the count itself moved LEVEL by 1.0 per detent, so
+            // one detent down took a pad from 1.00 to 0.00 (silent), and PAN to hard left / right.
+            case 0: levelSlider.knobRotated( Value * levelSlider.getInterval() ); break;
+            case 1: panSlider.knobRotated( Value * panSlider.getInterval() ); break;
             case 2:
                 mute.setToggleState( Value > 0, juce::dontSendNotification );
                 solo.setToggleState( Value <= 0, juce::dontSendNotification );
