@@ -169,6 +169,16 @@ namespace testcontrol
         if( screen == nullptr )
             return fail( "no screen" );
 
+        if( cmd == "touch" )
+        {
+            if( tok.size() != 2 )
+                return fail( "usage: touch X Y" );
+            auto r = peerTouch( { tok[0].getFloatValue(), tok[1].getFloatValue() }, ok, fail );
+            if( r.isNotEmpty() )
+                fail( r );
+            return;
+        }
+
         if( cmd == "tap" )
         {
             if( tok.size() != 2 )
@@ -265,6 +275,73 @@ namespace testcontrol
             if( auto* hit = findIn( *wins[i], match ) )
                 return hit;
         return nullptr;
+    }
+
+    juce::String TestControl::peerTouch( juce::Point<float> Pos, std::function<void()> Done, std::function<void( const juce::String& )> Fail )
+    {
+        auto* top = screen->getTopLevelComponent();
+        if( top->getPeer() == nullptr )
+            return "the main window has no peer";
+        const auto inTop = top->getLocalPoint( screen.getComponent(), Pos );
+
+        busy        = true;
+        auto finish = [this, Done, Fail, weak = std::weak_ptr<bool>( alive )]( const juce::String& Error ) {
+            if( weak.expired() )
+                return;
+            busy = false;
+            if( Error.isEmpty() )
+                Done();
+            else
+                Fail( Error );
+        };
+
+        // JUCE's own test: Component::contains asks the peer whether the window is the topmost
+        // one at that point. If not, bring the window to the front (that activates the app, as a
+        // finger on the unit's screen would find it in front anyway) and look again.
+        juce::Component::SafePointer<juce::Component> safeTop( top );
+        auto dispatch = [this, safeTop, inTop, Pos, finish]() {
+            if( safeTop == nullptr || safeTop->getPeer() == nullptr )
+                return finish( "the main window went away" );
+            if( !safeTop->contains( inTop ) )
+                return finish( "a real touch needs the window to be the topmost one at " + juce::String( Pos.x ) + " " + juce::String( Pos.y )
+                               + " (screen locked, or another window covers it)" );
+            if( auto* c = safeTop->getComponentAt( inTop.roundToInt() ) )
+                log( "touch " + nameOf( *c ) + " (" + typeName( *c ) + ") through the window" );
+            auto* peer  = safeTop->getPeer();
+            const auto raw   = inTop * safeTop->getDesktopScaleFactor(); // the peer's own (unscaled) coordinates
+            // The mouse source: JUCE creates touch sources only on platforms that report touch
+            // input (not macOS), so a touch-type event would have no source and be dropped.
+            auto       event = [peer, raw]( bool Down ) {
+                peer->handleMouseEvent( juce::MouseInputSource::InputSourceType::mouse, raw,
+                                        Down ? juce::ModifierKeys().withFlags( juce::ModifierKeys::leftButtonModifier ) : juce::ModifierKeys(),
+                                        Down ? 1.0f : juce::MouseInputSource::defaultPressure, juce::MouseInputSource::defaultOrientation,
+                                        juce::Time::currentTimeMillis() );
+            };
+            event( true );
+            juce::Timer::callAfterDelay( 80, [safeTop, peer, event, finish]() {
+                if( safeTop != nullptr && juce::ComponentPeer::isValidPeer( peer ) )
+                    event( false );
+                finish( {} );
+            } );
+        };
+        if( top->contains( inTop ) )
+            dispatch();
+        else
+        {
+            // Float the window above the others for the touch (no activation, no focus taken
+            // from whatever app is in front), then put it back.
+            log( "touch: floating the window above the others for the touch" );
+            const bool wasOnTop = top->isAlwaysOnTop();
+            top->setAlwaysOnTop( true );
+            juce::Timer::callAfterDelay( 150, [dispatch, safeTop, wasOnTop]() {
+                dispatch();
+                juce::Timer::callAfterDelay( 400, [safeTop, wasOnTop]() {
+                    if( safeTop != nullptr && !wasOnTop )
+                        safeTop->setAlwaysOnTop( false );
+                } );
+            } );
+        }
+        return {};
     }
 
     juce::String TestControl::touch( juce::Component& Target, juce::Point<float> Pos, std::function<void()> Done )
