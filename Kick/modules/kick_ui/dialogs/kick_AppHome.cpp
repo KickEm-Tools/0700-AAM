@@ -432,6 +432,10 @@ namespace kick_ui
                             ae.saveProject();
                             break;
 
+                        // TC and ON/OFF (SHIFT + TC) had no handler.
+                        case contracts::DeviceControlContracts::EN_TC: TimingCorrect::showWindow(); break;
+                        case contracts::DeviceControlContracts::EN_ON_OFF: TimingCorrect::setEnabled( !TimingCorrect::isEnabled() ); break;
+
                         default: break;
                     }
                 }
