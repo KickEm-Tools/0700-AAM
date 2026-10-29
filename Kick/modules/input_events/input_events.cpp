@@ -7,6 +7,7 @@
 #include "contracts/dcl/dcl_contracts_helper.h"
 
 #include "ComConfig.hpp"
+#include "source/kick_SurfaceFrameReader.h"
 
 // The serial link to the control-surface microcontroller: compiled wherever juce_serialport has
 // a POSIX implementation (Linux, macOS). On the unit it is /dev/ttymxc0; KICK_SERIAL_DEVICE
@@ -34,18 +35,28 @@ namespace Controls
     class HwSerialData : private juce::ChangeListener
         , private juce::Thread
         , private juce::AsyncUpdater
+        , private juce::Timer
     {
     public:
         HwSerialData()
-            : Thread( "Queue" ) { startThread(); }
+            : Thread( "Queue" )
+        {
+            frames.onProblem = []( const std::string& What ) { juce::Logger::writeToLog( "InputEvents: " + juce::String( What ) ); };
+            startThread();
+        }
 
         ~HwSerialData()
         {
+            stopTimer();
             close();
         }
 
         void connect()
         {
+            // The send thread: close() stops it, so a reconnect() must start it again (it did
+            // not, and every frame after a reconnect was queued and never sent).
+            if( !isThreadRunning() )
+                startThread();
 #if KICK_SERIAL_LINK
             // KICK_SERIAL_DEVICE=<absolute path> replaces the unit's port; unset, it is
             // /dev/ttymxc0 as always. Same settings and handshake either way.
@@ -82,6 +93,14 @@ namespace Controls
 
                     sPort.reset( new SerialPort( devPath, config, serialDebug ) );
                     juce::Logger::writeToLog( "InputEvents: control surface on " + devPath + " (" + origin + "), " + config.toString() + ": " + ( sPort->isOpen() ? "open" : "could not open" ) );
+                    frames.reset();
+                    missingLogged = false;
+                    // From the first open on, watch for a hang-up (the port's reader stops: a USB
+                    // adapter unplugged, the other end of a pseudo-terminal closed) and reopen
+                    // the port then. /dev/ttymxc0 on the unit does not hang up, so there this
+                    // only ever checks.
+                    if( sPort->isOpen() && !isTimerRunning() )
+                        startTimer( 1000 );
                     input.reset( new SerialPortInputStream( sPort.get() ) );
                     input->addChangeListener( this );
                     input->setNotify( SerialPortInputStream::NOTIFY_ALWAYS );
@@ -94,8 +113,9 @@ namespace Controls
             else
             {
                 DBG( "Serial Not Found" );
-                if( overridePath.isNotEmpty() )
+                if( overridePath.isNotEmpty() && !missingLogged )
                     juce::Logger::writeToLog( "InputEvents: KICK_SERIAL_DEVICE=" + overridePath + " does not exist (an absolute path is needed)" );
+                missingLogged = true;
             }
 #endif
         }
@@ -156,116 +176,53 @@ namespace Controls
 #endif
         }
 
-        void changeListenerCallback( juce::ChangeBroadcaster* source ) override
+        void changeListenerCallback( juce::ChangeBroadcaster* ) override
         {
-            int rxLength = (int)input->getTotalLength();
-            // DBG("Receive Length: " << rxLength);
-            if( !input->getTotalLength() || input->getTotalLength() < 6 )
+            // Everything that has arrived goes to the frame reader, which keeps a partial frame
+            // for the next notification and resynchronises on 'M' 'T' after anything else
+            // (kick_SurfaceFrameReader.h). Before, a read that did not start with a complete
+            // frame was dropped whole: a frame split over two reads was lost with the frame
+            // after it, and garbage lost every frame after it in that read.
+            const auto available = (int)input->getTotalLength();
+            if( available <= 0 )
                 return;
+            juce::HeapBlock<uint8_t> buffer( (size_t)available );
+            const int                got = input->read( buffer.get(), available );
+            if( got <= 0 )
+                return;
+            frames.push( buffer.get(), (size_t)got, [this]( CPktMgr::HWMsg_t& rxMsg ) {
+                if( rxMsg.pktDir != CPktMgr::enumPacketDir::EN_PKT_REQUEST )
+                    return; // a response (an acknowledgement of the app's message): ignored, as before
+                if( contracts::DclContractsHelper::isButtonMessage( rxMsg ) )
+                {
+                    DBG( "Button state = " << contracts::DclContractsHelper::getButtonState( rxMsg ) );
+                    if( ( contracts::DeviceControlContracts::EN_SHIFT == contracts::DclContractsHelper::getButtonCode( rxMsg ) ) )
+                        contracts::DclContractsHelper::setShiftPressed( contracts::DclContractsHelper::getButtonState( rxMsg ) != contracts::DeviceControlContracts::BTN_RELEASED );
+                }
+                messageReceivedFromControlSurface( rxMsg );
+            } );
+        }
 
-            juce::MemoryBlock serialData( (size_t)input->getTotalLength(), true );
-            size_t            len = (size_t)input->getTotalLength();
-
-            input->read( serialData.getData(), (int)input->getTotalLength() );
-
-            if( len < 4 )
+        void timerCallback() override
+        {
+#if KICK_SERIAL_LINK
+            // The port hung up: its reader stopped. Reopen it (connect() also sends the first
+            // handshake frame again), once a second until it is back.
+            if( input != nullptr && input->isReading() && sPort != nullptr && sPort->isOpen() )
+                return;
+            if( !hangUpLogged )
+                juce::Logger::writeToLog( "InputEvents: the control surface port hung up; reopening it" );
+            hangUpLogged = true;
+            input.reset();
+            output.reset();
+            sPort.reset();
+            connect();
+            if( input != nullptr && input->isReading() )
             {
-                DBG( "Size is less then 3 bytes" );
-                return;
+                juce::Logger::writeToLog( "InputEvents: the control surface port is open again" );
+                hangUpLogged = false;
             }
-
-            char* byteArray = serialData.begin();
-
-            CPktMgr& refobjFrameHdl = ms_objPktMgrUsb;
-
-            while( rxLength )
-            {
-                int pktIndex     = 0;
-                int pktOffset    = 0;
-                int packetLength = byteArray[5 + pktIndex] + 7;
-                // DBG("Packet Length: " << packetLength);
-
-                if( ( rxLength >= packetLength ) && ( byteArray[0] == 'M' ) && ( byteArray[1] == 'T' ) )
-                {
-                    while( packetLength )
-                    {
-                        if( packetLength > 1 )
-                        {
-                            refobjFrameHdl.PushByteToRxFifo( byteArray[0] );
-                        }
-                        byteArray++;
-                        packetLength--;
-                        rxLength--;
-                    }
-                }
-                else
-                {
-                    rxLength = 0;
-                }
-
-                if( refobjFrameHdl.IsFrameRcvComplete() == TRUE )
-                {
-                    refobjFrameHdl.SetFrameRcvComplete( FALSE );
-                    CPktMgr::HWMsg_t rxMsg;
-                    std::vector<int> tempData;
-                    tempData.push_back( 1 );
-                    rxMsg.pktType = refobjFrameHdl.GetRxPktType();
-                    rxMsg.pktCmd  = refobjFrameHdl.GetRxCommand();
-                    rxMsg.pktDir  = refobjFrameHdl.GetPktDir();
-
-                    int size = (int)refobjFrameHdl.GetRxFrameSize();
-
-                    /*DBG( "===========RX Message==========" );
-                    DBG( "Rx Type: " << rxMsg.pktType << "Rx pktId: " << rxMsg.pktCmd << "Rx size: " << size );
-                   */
-                    //juce::Logger::writeToLog( "Rx Type: " + juce::String(rxMsg.pktType) + "Rx pktId: " + juce::String(rxMsg.pktCmd) + "Rx size: " + juce::String(size ));
-
-                    int index = 0;
-                    while( size - 1 )
-                    {
-                        rxMsg.data.push_back( (int)refobjFrameHdl.PopUint8FromRxFifo() );
-                        index++;
-                        size--;
-                    }
-                    refobjFrameHdl.ClearReceiver();
-                    // DBG("Pad Num: "<<  rxMsg.data[0]);
-
-                    if( rxMsg.pktDir == CPktMgr::enumPacketDir::EN_PKT_REQUEST )
-                    {
-                        CPktMgr::HWMsg_t ackTxMsg;
-                        //ackTxMsg.pktType = rxMsg.pktType;
-                        //ackTxMsg.pktDir  = CPktMgr::enumPacketDir::EN_PKT_RESPONSE;
-                        //ackTxMsg.pktId     = rxMsg.pktId;
-                        //ackTxMsg.data      = rxMsg.data;
-
-                        //DBG("Ack Msg");
-                        //sendMessageToHardware( ackTxMsg );
-
-                        if( contracts::DclContractsHelper::isButtonMessage( rxMsg ) )
-                        {
-                            DBG( "Button state = " << contracts::DclContractsHelper::getButtonState( rxMsg ) );
-                            if( ( contracts::DeviceControlContracts::EN_SHIFT == contracts::DclContractsHelper::getButtonCode( rxMsg ) ) )
-                                contracts::DclContractsHelper::setShiftPressed( contracts::DclContractsHelper::getButtonState( rxMsg ) != contracts::DeviceControlContracts::BTN_RELEASED );
-                        }
-                        // juce::String log;
-                        // log += "Cmd:" + juce::String( rxMsg.pktCmd ) + " " + "type:" + juce::String( rxMsg.pktType );
-                        // juce::Logger::writeToLog( log );
-                        messageReceivedFromControlSurface( rxMsg );
-                    }
-                    else
-                    {
-                        //If the data is Ack (response) for the App message, ignore
-                        // Do Nothing
-                    }
-                }
-                else
-                {
-#if defined( DEBUG_PRINTS ) && ( DEBUG_PRINTS > 0 )
-                    DBG( "Data Frame Error" );
 #endif
-                    refobjFrameHdl.ClearReceiver();
-                }
-            }
         }
 
         void run() override
@@ -298,6 +255,9 @@ namespace Controls
         std::unique_ptr<SerialPortOutputStream> output;
 
         moodycamel::ConcurrentQueue<CPktMgr::HWMsg_t> txQueue;
+
+        SurfaceFrameReader frames{ ms_objPktMgrUsb, BUFFER_RX_SIZE };
+        bool               missingLogged{ false }, hangUpLogged{ false };
     };
     static std::unique_ptr<HwSerialData> _FPPort;
 
