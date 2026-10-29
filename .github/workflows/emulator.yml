@@ -37,18 +37,18 @@ jobs:
   # Fast mode: the desktop Kick app on macOS, panel over a pty. Every pull request.
   fast:
     if: github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || inputs.mode != 'vm')
-    uses: KickEm-Tools/KickEmulator/.github/workflows/test-firmware.yml@ci/test-firmware
+    uses: KickEm-Tools/KickEmulator/.github/workflows/test-firmware.yml@28f7d604b647f26bd18f476060cb7448c0323827  # KickEmulator main, 2026-10-29; @v1 once tagged
     with:
       mode: fast
       runner: ${{ inputs.runner || 'macos-15' }}
       checks: ${{ inputs.checks || 'smoke' }}
-      emulator-ref: ci/test-firmware
+      emulator-ref: 28f7d604b647f26bd18f476060cb7448c0323827
 
   # Faithful mode: this commit's Linux arm64 KT_Kick in a QEMU VM (emulated: hosted arm64 runners
   # have no KVM), started by the unit's own ktkick.service. Nightly on main and on request.
   vm:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.mode != 'fast')
-    uses: KickEm-Tools/KickEmulator/.github/workflows/test-firmware.yml@ci/test-firmware
+    uses: KickEm-Tools/KickEmulator/.github/workflows/test-firmware.yml@28f7d604b647f26bd18f476060cb7448c0323827  # KickEmulator main, 2026-10-29; @v1 once tagged
     with:
       mode: vm
-      emulator-ref: ci/test-firmware
+      emulator-ref: 28f7d604b647f26bd18f476060cb7448c0323827
