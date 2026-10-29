@@ -47,7 +47,7 @@ namespace mt
         noteNo = Note;
 
         gain.setCurrentAndTargetValue( 0.0 );
-        gain.setTargetValue( ( (double)Velocity / 127.0 ) ); // Linear scale...
+        gain.setTargetValue( ( (double)Velocity / 127.0 ) * noteGain ); // Linear scale, times the pad level
 
         state.store( State::RUNNING );
         ASliceRenderer::start();
