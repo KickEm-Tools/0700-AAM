@@ -53,6 +53,11 @@ namespace mt
 
         // Re-blocking FIFOs (one ring per channel).
         juce::AudioBuffer<float> inRing, outRing;
+
+        // Opt-in test tooling (KICK_AUDIO_PROBE, KICK_AUDIO_INPUT), see mt_AudioDeviceProbe.h.
+        // Both stay null unless the variable is set.
+        std::unique_ptr<AudioProbe> probe;
+        std::unique_ptr<TestInput>  testInput;
         int                      ringSize{ 0 };
         int                      inWrite{ 0 }, inAvail{ 0 };
         int                      outWrite{ 0 }, outRead{ 0 }, outAvail{ 0 };

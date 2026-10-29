@@ -572,7 +572,15 @@ namespace kick_ui
                 return;
             }
 
-            if( contracts::DclContractsHelper::isNavigationMessage( f_HwMsg ) && ui::getComponentInFocus() && !contracts::DclContractsHelper::isPadButtonMessage( f_HwMsg ) )
+            // P1-P16 belong to the screen, which assigns them (PAD MIX, TRACK MIX, STEP SEQ...). A
+            // focused control ignores them (KickControlsProcessor::handleCommand: "Nothing to be done
+            // for link knobs"), so routing them there dropped them: in PAD MIX, hitting a pad focuses
+            // its on-screen button and P1 stopped changing the level. Only a modal popup, which
+            // forwards them to its content, keeps them.
+            const bool linkKnob = contracts::DclContractsHelper::isKnobMessage( f_HwMsg ) && contracts::DclContractsHelper::getKnobCode( f_HwMsg ) != contracts::DeviceControlContracts::KnobSequence::EN_KNOB_CENTER;
+            const bool toFocus  = !linkKnob || juce::Component::getCurrentlyModalComponent() != nullptr;
+
+            if( toFocus && contracts::DclContractsHelper::isNavigationMessage( f_HwMsg ) && ui::getComponentInFocus() && !contracts::DclContractsHelper::isPadButtonMessage( f_HwMsg ) )
             {
                 log += " is Navigation message";
                 juce::Logger::writeToLog( log );
