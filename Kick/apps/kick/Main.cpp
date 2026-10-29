@@ -167,7 +167,9 @@ public:
         w->setBounds( bounds );
 
 #if( JUCE_IOS || JUCE_ANDROID || JUCE_LINUX || __linux__ )
-        juce::Desktop::getInstance().setKioskModeComponent( w.get(), false );
+        // (A mirrored window, KICK_SCREEN_MIRROR, has no display to fill.)
+        if( !testcontrol::ScreenMirror::isMirrored( *w ) )
+            juce::Desktop::getInstance().setKioskModeComponent( w.get(), false );
 #endif
         // Position ...
         w->setTopLeftPosition( 0, 0 );
@@ -240,10 +242,15 @@ public:
     {
     public:
         explicit HomeWindow( const juce::String& name )
-            : juce::DocumentWindow( name, juce::Colours::black, 0 )
+            : juce::DocumentWindow( name, juce::Colours::black, 0, !testcontrol::ScreenMirror::requested() )
         {
             setTitle( name );
             setContentOwned( &kick_ui::KickHome::Instance(), true );
+            // Opt-in screen mirror (KICK_SCREEN_MIRROR, modules/test_control): the window goes on
+            // the desktop here instead of in the base class, so that createNewPeer below is ours.
+            // Without the variable the base class has already added it, exactly as before.
+            if( !isOnDesktop() )
+                addToDesktop();
         }
 
         ~HomeWindow() final = default;
@@ -251,6 +258,15 @@ public:
         void closeButtonPressed() override
         {
             juce::JUCEApplication::getInstance()->systemRequestedQuit();
+        }
+
+        juce::ComponentPeer* createNewPeer( int styleFlags, void* nativeWindow ) override
+        {
+            // A headless peer serving the screen over KICK_SCREEN_MIRROR, if set; otherwise
+            // (always on the unit) the normal native window.
+            if( auto* mirror = testcontrol::ScreenMirror::createPeer( *this, styleFlags ) )
+                return mirror;
+            return juce::DocumentWindow::createNewPeer( styleFlags, nativeWindow );
         }
 
         void inputAttemptWhenModal() override

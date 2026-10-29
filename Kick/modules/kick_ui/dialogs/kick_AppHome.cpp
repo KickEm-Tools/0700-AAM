@@ -234,6 +234,11 @@ namespace kick_ui
         addKeyListener( &contracts::getKeypressDetector() );
         // LED control
         ledControl_ = std::make_unique<KickLEDs>();
+        // FULL / HALF LEVEL, 16 LEVELS, NOTE REPEAT / LATCH and ERASE + pad (kick_PadModifiers.h).
+        padModifiers_ = std::make_unique<PadModifiers>( [this]( CPktMgr::HWMsg_t& Msg ) {
+            if( auto* scr = getScreen( getCurrentScreen() ); scr && scr->requiresHandleCommand() )
+                scr->handleCommand( Msg );
+        } );
 
         // Setup size and other application options.
         setInterceptsMouseClicks( false, true );
@@ -463,6 +468,8 @@ namespace kick_ui
         {
             log += " In Recent Prj";
             juce::Logger::writeToLog( log );
+            if( getCurrentScreen() != Screen::MenuMidiControl && padModifiers_ && padModifiers_->handle( f_HwMsg, getCurrentScreen() ) )
+                return;
             if( contracts::DclContractsHelper::isButtonMessage( f_HwMsg ) && ( contracts::DclContractsHelper::getButtonState( f_HwMsg ) == contracts::DeviceControlContracts::BTN_PRESSED ) )
             {
                 log += " In is button";
@@ -500,15 +507,7 @@ namespace kick_ui
                         case contracts::DeviceControlContracts::EN_BANK_F: ae.setBank( "F" ); break;
                         case contracts::DeviceControlContracts::EN_BANK_G: ae.setBank( "G" ); break;
                         case contracts::DeviceControlContracts::EN_BANK_H: ae.setBank( "H" ); break;
-                        case contracts::DeviceControlContracts::EN_HALF_LEVEL:
-
-                            contracts::DclSignals::sendCommandToDcl( contracts::DclContractsHelper::setLEDONMessage( contracts::DeviceControlContracts::EN_HALF_LEVEL ) );
-                            contracts::DclContractsHelper::setHalfLevel( true );
-                            break;
-                        case contracts::DeviceControlContracts::EN_FULL_LEVEL:
-                            contracts::DclSignals::sendCommandToDcl( contracts::DclContractsHelper::setLEDONMessage( contracts::DeviceControlContracts::EN_FULL_LEVEL ) );
-                            contracts::DclContractsHelper::setHalfLevel( false );
-                            break;
+                        // FULL LEVEL, HALF LEVEL, 16 LEVELS, NOTE REPEAT and LATCH: padModifiers_ above.
 
                         case contracts::DeviceControlContracts::EN_BACK: goBack(); break;
 

@@ -26,6 +26,7 @@
 namespace kick_ui
 {
     class KickLEDs;
+    class PadModifiers;
     class AppStatusbar;
     class KickHome : public juce::Component
         , private juce::AsyncUpdater
@@ -63,6 +64,7 @@ namespace kick_ui
 
         std::unique_ptr<Component>                 ctrlBar_;
         std::unique_ptr<KickLEDs>                  ledControl_;
+        std::unique_ptr<PadModifiers>              padModifiers_;
         juce::Component::SafePointer<AppStatusbar> statusBar_;
         int                                        page{ 0 };
 

@@ -220,18 +220,22 @@ macOS. Windows has no termios, so there the port never opens (a `#pragma message
 
 | Job | Runner | Builds |
 |---|---|---|
-| `Kick (macOS)` | `macos-14` | `Kick.app` |
+| `Kick (macOS)` | `macos-15` | `Kick.app` |
 | `Kick (Linux x86_64)` | `ubuntu-24.04` | `Kick` |
-| `KT_Kick (Linux arm64)` | `ubuntu-24.04-arm` | `Kick`, packaged as the `KT_Kick-linux-arm64` artifact |
+| `KT_Kick (Linux arm64)` | `ubuntu-24.04-arm`, in a `debian:bookworm` container | `Kick`, packaged as the `KT_Kick-linux-arm64` artifact |
 
-Every job also builds and runs the control-surface link tests (8.7) with `ctest`.
+Every job also builds and runs the control-surface link tests (8.7) with `ctest`. Linux jobs run
+at most one compiler per 2.5 GB of memory (`-O3 -flto`), and no more than one per CPU.
 
 The `KT_Kick-linux-arm64` artifact holds `KT_Kick-linux-arm64.tar.gz` (the binary as
 `KT_Kick` plus the `assets/`, `templates/` and `demos/` it reads from `/app` at run time, and
-`manifest.json`) and `manifest.json` next to it: git ref and commit, build date, compiler, runner
-image, JUCE version, and the shared libraries the binary needs. It is a native Ubuntu 24.04 arm64
-build, not a Buildroot SDK build. The CPM download cache is kept between runs, keyed on the CPM
-and JUCE versions and the JUCE patch.
+`manifest.json`) and `manifest.json` next to it: git ref and commit, build date, compiler, runner,
+container image, distribution, the glibc it was built with and the oldest it needs
+(`glibc_required`), JUCE version, and the shared libraries the binary needs. It is built in
+Debian 12 (glibc 2.36), not on the runner's Ubuntu 24.04 (glibc 2.39, whose binaries also need
+`libmvec.so.1`), so it starts on Debian 12 and later, such as the guest of KickEmulator's faithful
+mode. It is not a Buildroot SDK build. The CPM download cache is kept between runs, keyed on the
+CPM and JUCE versions and the JUCE patch.
 
 `.github/workflows/emulator.yml` runs the firmware against
 [KickEmulator](https://github.com/KickEm-Tools/KickEmulator), through its reusable workflow
@@ -324,15 +328,17 @@ Both directions use the same frame, built by `CPktMgr::BuildAndTransmitPacket`:
 - **CRC.** CRC-8 with polynomial 0x31 (x^8 + x^5 + x^4 + 1), initial value 0xFF, MSB first, no
   reflection, no final XOR (the CRC-8/NRSC-5 parameters; the check value of `"123456789"` is
   0xF7). It covers every byte from `'M'` to the last payload byte.
-- **The trailing byte.** The app's reader takes `size + 7` bytes per frame, one more than the
-  frame, and ignores the last one. A surface must therefore send one byte after the CRC.
+- **The trailing byte.** The surface sends one byte after the CRC; the app's reader skips it
+  (8.4). Before `fix/serial-robustness` the reader took `size + 7` bytes per frame and required
+  it.
   `Kick/tests/fake_mcu.py` sends `'\n'`: the line `f_txData.push_back('\n')`, commented out at the
   end of `BuildAndTransmitPacket`, suggests this is what the microcontroller does. The app's own
   frames have no trailing byte.
 - **Example.** `4D 54 00 00 04 02 01 A0 0A` is SYSTEM, request, `EN_SYS_CHECK_COMM_STATUS`,
   payload `[1]`, CRC 0xA0, trailing `'\n'`.
 - **Size limit.** The app's receive FIFO is 20 bytes (`BUFFER_RX_SIZE`, `ComConfig.hpp`) and
-  `PushByteToRxFifo` does not check bounds. A surface-to-app payload must not exceed 20 bytes.
+  `PushByteToRxFifo` does not check bounds, so the reader drops a frame whose payload is larger
+  (8.4). A surface-to-app payload must not exceed 20 bytes.
   Every packet the app handles has at most 4.
 
 **Packets the app handles (surface to app):**
@@ -413,53 +419,50 @@ Timing and retries:
 ### 8.4 What the reader does with imperfect input
 
 The reader is `HwSerialData::changeListenerCallback`. It runs on the message thread, once per
-change notification from the serial input stream:
+change notification from the serial input stream, reads everything buffered and hands it to
+`Controls::SurfaceFrameReader` (`modules/input_events/source/kick_SurfaceFrameReader.h`):
 
-1. **Fewer than 6 bytes buffered:** it returns and leaves them in the stream.
-2. **Otherwise it reads everything buffered** and walks it frame by frame. Each frame must start
-   with `'M'` `'T'` and be complete (`size + 7` bytes). At the first one that is not, it stops,
-   and **the rest of that read is discarded**.
-3. **Complete frames** go through `CPktMgr::PushByteToRxFifo`, all but the trailing byte.
-   - CRC matches: the frame is dispatched (requests only).
-   - CRC does not match: the frame is dropped silently. `Data Frame Error` is logged only in
-     builds with `DEBUG_PRINTS`.
+1. **Bytes are kept between notifications**, so a frame that arrives in two pieces is put back
+   together.
+2. **Anything that is not `'M'` `'T'` is skipped** up to the next `'M'` `'T'`. The one trailing
+   byte after each frame is skipped silently; other skipped bytes are logged
+   (`InputEvents: skipped 10 byte(s) before a frame: 00 FF ...`). The trailing byte is not
+   required: a frame without it is taken as well.
+3. **Each frame goes through `CPktMgr::PushByteToRxFifo` whole, from its `'M'`**, so CPktMgr's
+   partial-frame buffer (a function-level `static`) is always emptied by its CRC state.
+   - CRC matches: the frame is dispatched (requests only; responses are ignored).
+   - CRC does not match: the frame is dropped (`InputEvents: dropped a frame with a bad CRC`),
+     up to an `'M'` `'T'` inside it, where a good frame may start.
+4. **Frames the app cannot take are dropped:** no payload (size 1; no handler expects an empty
+   message, and `PushByteToRxFifo` never completes one), a size of 0, and a payload larger than
+   the 20-byte receive FIFO, which used to overrun it.
 
-Consequences, each checked by `kick_protocol_roundtrip`:
+Checked by `kick_protocol_roundtrip` (two frames in one read, frames with and without the
+trailing byte, a bad CRC alone and before a good frame, a frame split across two reads, fewer
+than 6 bytes, garbage before and between frames, an empty payload, an oversized payload) and,
+over a pseudo-terminal against the whole app, by the emulator's `checks/serial_faults`
+(KickEm-Tools/KickEmulator).
 
-- **Two frames in one read:** both dispatched.
-- **No trailing byte:** a lone frame is too short and is dropped. In two back-to-back frames the
-  first is taken, and its "trailing byte" is the second frame's `'M'`, so the second is lost.
-- **Bad CRC:** that frame is lost, and the next good frame is fine.
-- **A frame split across two notifications** (6 or more bytes, but not all of it): the first part
-  is read and dropped. The rest then starts the next read without `'M'`, so the frame after it is
-  lost too. A pty usually delivers a write in one piece; a UART at 230400 baud may not.
-- **Garbage before a frame,** in the same read: the whole read is dropped. Garbage between frames
-  drops everything after it in that read.
-- **A frame with an empty payload** (size 1) never completes. The bytes it left in `CPktMgr`'s
-  partial-frame buffer are not cleared by `ClearReceiver()`, so the next good frame fails its CRC
-  as well. That buffer is a function-level `static`, shared by every `CPktMgr` in the process.
-- **A payload over 20 bytes** writes past the receive FIFO.
-- **A stream that grows during the callback.** The reader asks the stream for its length three
-  times: to size its buffer, to record the length, and in the `read()` call itself. A stream that
-  grew in between would make `read()` write past the buffer. `juce_serialport` prevents this:
-  while a listener runs, the length it sees is fixed (8.6).
+Until `fix/serial-robustness`, a read that did not start with a complete frame was dropped whole:
+a frame split across two reads was lost with the frame after it, garbage before a frame lost it,
+garbage between frames lost everything after it in that read, and an empty payload spoiled the
+next frame's CRC.
 
-### 8.5 When `reconnect()` runs
+### 8.5 Hang-ups and `reconnect()`
 
-- **The only trigger.** `Controls::InputEvents::reconnect()` runs only when the app is asked to
-  send SYSTEM `EN_SYS_RECONNECT` (`DclContractsHelper::reconnectMessage()`). In this tree only
-  `apps/kick_device_control_test` sends it. Nothing calls it on a read error, a hang-up or a
-  timeout.
+- **A hang-up** (a USB adapter unplugged, the other end of a pseudo-terminal closed): the serial
+  port's reader logs `SerialPort read: <path>: end of file; reader stopped` and stops. From the
+  first successful open on, a 1 s timer in `HwSerialData` checks that the reader is still
+  running; once it is not, the app logs `InputEvents: the control surface port hung up; reopening
+  it` and reopens the port once a second until it is back (`InputEvents: the control surface port
+  is open again`). Reopening sends the handshake's first frame again, so the surface answers as at
+  start-up. `/dev/ttymxc0` on the unit does not hang up, so there the timer only ever checks.
+- **`reconnect()`** (`close()` then `connect()`) runs when the app is asked to send SYSTEM
+  `EN_SYS_RECONNECT` (`DclContractsHelper::reconnectMessage()`; in this tree only
+  `apps/kick_device_control_test` sends it). `close()` stops the send thread; `connect()` now starts
+  it again (before `fix/serial-robustness` it did not, and every frame after a reconnect was queued
+  and never sent).
 - **Shutdown.** `EN_SYS_SHUTDOWN` calls `shutdown()`, which destroys the link.
-- **What it does.** `HwSerialData::reconnect()` is `close()` then `connect()`:
-  - `close()` closes the port and stops the send thread;
-  - `connect()` does not start the send thread again.
-
-  So after a reconnect, frames are queued but never sent, including the new step 1 of the
-  handshake. This is to be confirmed and fixed with the fault tests (`/goal-serial` phase 5).
-- **Hang-up.** When the other end goes away (a pty master closes, a USB adapter is unplugged), the
-  serial port's reader logs `SerialPort read: <path>: end of file; reader stopped` and stops. The
-  app keeps the port open and receives nothing more until something calls `reconnect()`.
 
 ### 8.6 `juce_serialport`
 
@@ -543,6 +546,7 @@ All of them are unset on a unit (`ktkick.service` sets none of them).
 |---|---|---|---|
 | `KICK_SERIAL_DEVICE=<absolute path>` | Opens that device for the control-surface link instead of `/dev/ttymxc0`, with the same settings (230400 8N1) and handshake: a USB serial adapter, or the pseudo-terminal of an emulated panel | `modules/input_events` (from `feature/serialport`) | `/dev/ttymxc0`, as always |
 | `KICK_TEST_CONTROL=<file>` | Starts the test-control module (9.3): the app polls `<file>` for commands that touch the screen, list or render it, and read the transport | `modules/test_control`, created by `apps/kick/Main.cpp` | Not created: nothing is polled or logged, focus is JUCE's alone |
+| `KICK_SCREEN_MIRROR=<unix socket path>` | The main window gets no native window: a headless peer renders it (popups and bubbles included) and serves it over RFB ("VNC") on that socket, and the viewer's pointer becomes touches (9.5). For an emulator that shows the screen inside its panel, and for checks with the computer's screen locked | `modules/test_control` (`kick_ScreenMirror.*`), used by `HomeWindow::createNewPeer` in `apps/kick/Main.cpp` | Not created: the window is the normal native one, created as before; no socket, nothing logged |
 | `KICK_AUDIO_PROBE=<file.wav>` | `mt::AudioDevice` writes the engine's master output to that WAV (32-bit float) and logs `AudioProbe: t=<n>s peak=<x>dBFS rms=<y>dBFS` once per second of audio (`-120.0dBFS` is silence). The audio thread only copies into a lock-free FIFO; a background thread writes | `AudIO/AudIO_juce/source/mt_AudioDeviceProbe.*` | No probe object; the audio callback is unchanged |
 | `KICK_AUDIO_INPUT=silence\|device\|tone[:hz]\|pulse[:ms]\|<file>` | Replaces the device input on every channel with digital silence, a -12 dBFS sine (1 kHz default), 50 ms 1 kHz bursts at -6 dBFS every 500 ms (or `<ms>`), or a looped audio file; `device` (or unset) keeps the real input. Logged as `TestInput: ...` | same | The real input |
 | `KICK_LOG_NOTES=1` | The sequencer logs every note it plays: `Note: track '<name>' tick <t> pos <p> note <n> velocity <v> id <id>`. Read once | `engine/audio_engine/engine/mt_audio_track.cpp` | Nothing logged |
@@ -597,6 +601,7 @@ shows up as a timeout.
 | Command | What it does |
 |---|---|
 | `tap X Y` | Touches pixel (X, Y) of the 1024x600 screen (the main window) |
+| `touch X Y` | The same as a real touch: a button-down and, 80 ms later, a button-up handed to the window's `ComponentPeer`, so JUCE dispatches it to the component, its mouse listeners and its parents' (list rows). With a native window it needs the window to be the topmost one there (it floats the window above the others for the touch, and refuses while the screen is locked); with the screen mirror (9.5) it always works |
 | `click NAME` | Touches the centre of the showing component whose title (or name) is NAME, popups first: Preferences tabs `Info`, `Hardware`, `CV`, `Ethernet`, `WiFi`, buttons such as `Settings`, `Resources`, `Firmware Update` |
 | `clickat NAME FX FY` | Touches NAME at fraction (FX, FY) of its size, for controls with untitled parts |
 | `list [FILTER]` | Logs `TestControl: item <type> <name> <x y w h> screen\|popup` for every showing, titled component (bounds in screen pixels, usable with `tap`) |
@@ -633,3 +638,46 @@ Two generic changes make the screen behave on a desktop as on the unit, with no 
 - List rows (`KickTableView`) are hit-tested in the list's own coordinates, and the Q-Link row
   maths measures the list from the top-level component rather than the desktop. On the unit both
   give the same numbers.
+
+### 9.5 The screen mirror
+
+`KICK_SCREEN_MIRROR=<unix socket path>` lets another program show the app's screen and touch it,
+with nothing of the app on the computer's desktop. An emulator uses it to draw the screen inside
+its front panel, in the display cut-out. Without the variable nothing changes: `HomeWindow` is
+created and put on the desktop exactly as before, and none of this code runs.
+
+With it, `HomeWindow::createNewPeer` returns a headless `ComponentPeer`
+(`testcontrol::ScreenMirror`, `modules/test_control/source/kick_ScreenMirror.*`) instead of a
+native window. JUCE neither knows nor cares: it paints into that peer and dispatches its input as
+it does for a native window.
+
+- **Painting.** `repaint()` on the window or anything on it (popups, the spinner and bubbles are
+  its children, 9.4) reaches the peer, which collects the areas and renders them with JUCE's
+  software renderer, the renderer the unit uses, at most 30 times a second. It paints only while a
+  viewer is connected; a new viewer first gets the whole screen.
+- **Serving.** The peer runs a minimal RFB 3.8 server (RFC 6143) on the unix socket: security
+  type None, raw encoding, only the rectangles that changed, one viewer at a time (a new one
+  replaces the old). The socket file is created with mode 0600 and removed on exit; there is no
+  network listener. Viewers may ask for any 32-bit true-colour pixel format.
+- **Touches.** The viewer's pointer events become mouse events on the peer, through
+  `ComponentPeer::handleMouseEvent` as a native window's are: button 1 down, moves while it is
+  down, button 1 up. Moves with no button held (a viewer's hover) are ignored, since a touch
+  panel has no hover. JUCE then dispatches them to the component under the point, its mouse
+  listeners and its parents' listeners (list rows, drags, sliders), with its own focus handling,
+  as for a finger on the unit's screen. The peer reports itself focused (it is the only window),
+  so JUCE gives keyboard focus to touched controls. Keyboard events from the viewer are ignored:
+  keys come from the control surface.
+- **No desktop dependency.** Nothing asks the window server anything, so painting, touches, the
+  test-control module's `touch` and `shot` work with the computer's screen locked. On macOS the
+  app's Dock icon is hidden. On Linux the window is not made the kiosk component (there is no
+  display to fill).
+
+Log lines: `ScreenMirror: serving the screen on <path> (...)`, `viewer connected (1024x600)`,
+`touch down <x> <y> on <component>` / `touch up ...`, and `viewer gone (<why>) after <n> s:
+<updates> updates (<n>/s), <n> MB`. If the socket cannot be created (path too long, a
+non-socket file in the way) it logs `ScreenMirror: cannot serve the screen on ...; using a normal
+window` and the app runs with its native window. Not available on Windows.
+
+Any RFB viewer that can connect to a unix socket and accepts no authentication can be the
+viewer; the emulator's panel is one (`kickem-panel --screen embedded --screen-source
+unix:<path>`, `KickEm-Tools/KickEmulator`).

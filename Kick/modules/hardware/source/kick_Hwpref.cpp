@@ -39,6 +39,67 @@ namespace mt
             juce::Logger::writeToLog( "FeatureUnavailable: " + hw::getName( F ) + ": command not run: " + juce::String( Command ) );
             return false;
         }
+
+        /// Runs Command through the shell. Returns its exit status, and its stdout and stderr in Output.
+        int runCommand( const std::string& Command, std::string& Output )
+        {
+            Output.clear();
+#if( JUCE_LINUX || __linux__ )
+            FILE* pipe = popen( ( Command + " 2>&1" ).c_str(), "r" );
+            if( pipe == nullptr )
+                return -1;
+            char buffer[128];
+            while( fgets( buffer, sizeof( buffer ), pipe ) != nullptr )
+                Output += buffer;
+            return pclose( pipe );
+#else
+            return -1;
+#endif
+        }
+
+        /// Sets the system clock to Timestamp, "YYYY-MM-DD HH:MM:SS" in local time.
+        /// timedatectl set-time also writes the RTC, but systemd-timedated refuses it while NTP
+        /// (systemd-timesyncd, enabled on the unit) is active: then date -s sets the clock, and
+        /// hwclock writes the RTC in UTC as timedated would have. NTP may later replace the time.
+        void setClock( const std::string& Timestamp )
+        {
+            const std::string command = "timedatectl set-time '" + Timestamp + "'";
+            // Never set the clock of a system that is not a unit, such as a developer's computer.
+            if( !isFeatureAvailable( hw::Feature::clock, command ) )
+                return;
+
+            std::string output;
+            if( runCommand( command, output ) == 0 )
+            {
+                juce::Logger::writeToLog( "Clock: set to " + juce::String( Timestamp ) + " (timedatectl set-time)" );
+                return;
+            }
+            juce::Logger::writeToLog( "Clock: timedatectl set-time failed: " + juce::String( output ).trim() );
+
+            if( runCommand( "date -s '" + Timestamp + "'", output ) != 0 )
+            {
+                juce::Logger::writeToLog( "Clock: date -s failed: " + juce::String( output ).trim() );
+                return;
+            }
+            juce::Logger::writeToLog( "Clock: set to " + juce::String( Timestamp ) + " (date -s)" );
+            if( runCommand( "hwclock -w -u", output ) != 0 )
+                juce::Logger::writeToLog( "Clock: hwclock -w -u failed, the RTC keeps its time: " + juce::String( output ).trim() );
+        }
+
+        /// "YYYY-MM-DD HH:MM:SS", the form timedatectl set-time and date -s both take.
+        std::string makeTimestamp( int Year, int Month, int Day, int Hour, int Minute, int Second )
+        {
+            return juce::String::formatted( "%04d-%02d-%02d %02d:%02d:%02d", Year, Month, Day, Hour, Minute, Second ).toStdString();
+        }
+
+        std::tm getLocalTime()
+        {
+            std::time_t now = std::time( nullptr );
+            std::tm     tm{};
+            if( std::tm* t = std::localtime( &now ) )
+                tm = *t;
+            return tm;
+        }
     } // namespace
 
     HwPref::HwPref()
@@ -950,44 +1011,15 @@ namespace mt
 
     void HwPref::setDate( int day, int month, int year )
     {
-        //date - s "2024-05-15"
-        std::string cmd = std::to_string( year ) + "-" + std::to_string( month ) + "-" + std::to_string( day );
-        DBG( "Setting Day -> " << cmd );
-        // Never set the clock of a system that is not a unit, such as a developer's computer.
-        if( !isFeatureAvailable( hw::Feature::clock, cmd ) )
-            return;
-        // Execute the command
-        int result = std::system( cmd.c_str() );
-        // Check if the command executed successfully
-        if( result == 0 )
-        {
-            DBG( "Date successfully updated to: " << day << "/" << month << "/" << year );
-        }
-        else
-        {
-            DBG( "Failed to update date." );
-        }
+        // Keep the time of day: a date alone ("date -s 2024-05-15") would also set it to midnight.
+        const std::tm now = getLocalTime();
+        setClock( makeTimestamp( year, month, day, now.tm_hour, now.tm_min, now.tm_sec ) );
     }
 
     void HwPref::setTime( int hour, int minute )
     {
-        std::string cmd = std::to_string( hour ) + ":" + std::to_string( minute ) + ":00";
-        DBG( "Setting Day -> " << cmd );
-        if( !isFeatureAvailable( hw::Feature::clock, cmd ) )
-            return;
-        // Execute the command
-        int result = std::system( cmd.c_str() );
-        // Check if the command executed successfully
-        if( result == 0 )
-        {
-            DBG( "Time successfully updated to: " << hour << "/" << minute );
-        }
-        else
-        {
-            DBG( "Failed to update Time." );
-        }
-
-        DBG( "Setting Day -> " << hour << "::" << minute );
+        const std::tm now = getLocalTime();
+        setClock( makeTimestamp( now.tm_year + 1900, now.tm_mon + 1, now.tm_mday, hour, minute, 0 ) );
     }
 
     // Get the number of days in a month, considering leap years

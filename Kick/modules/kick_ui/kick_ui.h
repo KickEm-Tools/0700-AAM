@@ -129,6 +129,7 @@
     #include "modes/filebrowser/kick_fileUtils.h"
     #include "modes/filebrowser/kick_fileBrowser.h"
 
+    #include "dialogs/kick_PadModifiers.h"
     #include "dialogs/kick_AppHome.h"
     //new file
     #include "recent_project/kick_RecentProject.h"

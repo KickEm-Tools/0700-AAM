@@ -53,7 +53,7 @@ namespace kick_ui
         ui::KickListBox      taps{ ui::KickListBox::withTitleBar, "NO OF TAPS", { "1", "2", "4" }, 2 };
 
         ui::KickNumberT<int> date_DD{ "Day", 1, 31, 1, 1, true };
-        ui::KickNumberT<int> date_MM{ "Minute", 1, 12, 1, 1, true };
+        ui::KickNumberT<int> date_MM{ "Month", 1, 12, 1, 1, true };
         ui::KickNumberT<int> date_YYYY{ "Year", 2014, 2099, 2024, 1, true };
 
         ui::KickNumberT<int> time_HH{ "Hour", 00, 23, 00, 1, true }, time_MM{ "Minute", 0, 59, 00, 1, true };

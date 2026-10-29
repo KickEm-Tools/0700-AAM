@@ -506,6 +506,9 @@ namespace kick_ui
             }
             if( btnNum == contracts::DeviceControlContracts::BtnLedSequence::EN_ERASE )
             {
+                // ERASE is held (ERASE + pad, kick_PadModifiers.h): act on the press only.
+                if( contracts::DclContractsHelper::getButtonState( f_HwMsg ) != contracts::DeviceControlContracts::BTN_PRESSED )
+                    return;
                 const mt::MTSelected& aeSelected{ ae.getSelected() };
                 ae.deleteSelectedNotes( aeSelected );
                 gridNeedsRepaint();

@@ -9,9 +9,9 @@
 // kick_protocol_roundtrip: every control-surface packet type through CPktMgr and back.
 //
 //  - Surface -> app: encoded with CPktMgr::BuildAndTransmitPacket plus the one trailing byte
-//    the microcontroller sends, decoded the way the app's serial reader does
-//    (modules/input_events/input_events.cpp, HwSerialData::changeListenerCallback, copied
-//    below as appRead(); keep the two in step), into the app's 20-byte receive FIFO.
+//    the microcontroller sends, decoded by the app's own frame reader
+//    (modules/input_events/source/kick_SurfaceFrameReader.h, which
+//    HwSerialData::changeListenerCallback uses), into the app's 20-byte receive FIFO.
 //  - App -> surface: encoded the same way (no trailing byte), decoded byte by byte with
 //    CPktMgr::PushByteToRxFifo, as a microcontroller would, into a FIFO large enough for the
 //    biggest payload (33 bytes: EN_PAD_SET_STEP_ALL_PAD).
@@ -24,6 +24,7 @@
 #include <PktMgr/PktMgr.hpp>
 #include <contracts/dcl/dcl_contracts.h>
 #include <input_events/ComConfig.hpp>
+#include <input_events/source/kick_SurfaceFrameReader.h>
 
 #include <array>
 #include <cstdint>
@@ -120,49 +121,16 @@ namespace
     std::array<uint8_t, BUFFER_RX_SIZE> appRxFifo{}, appTxFifo{};
     CPktMgr                             appMgr( CPktMgr::EN_COM_CHANNEL_USB, appRxFifo.data(), BUFFER_RX_SIZE, appTxFifo.data(), BUFFER_RX_SIZE, 60 );
 
-    /// One change notification's worth of bytes through the app's reader (a copy of the loop in
-    /// HwSerialData::changeListenerCallback). Returns the frames it dispatches. *leftInStream is
-    /// set when the reader returns without reading (fewer than 6 bytes available).
-    std::vector<Msg> appRead( const Bytes& bytes, bool* leftInStream = nullptr )
+    /// The app's frame reader, as HwSerialData holds it: bytes are kept between notifications.
+    Controls::SurfaceFrameReader appReader( appMgr, BUFFER_RX_SIZE );
+
+    /// One change notification's worth of bytes through the app's reader. Returns the frames it
+    /// dispatches. *pending is set to the bytes it keeps for the next notification.
+    std::vector<Msg> appRead( const Bytes& bytes, size_t* pending = nullptr )
     {
         std::vector<Msg> out;
-        if( leftInStream ) *leftInStream = false;
-        if( bytes.size() < 6 )
-        {
-            if( leftInStream ) *leftInStream = true;
-            return out;
-        }
-
-        std::vector<char> serialData( bytes.begin(), bytes.end() );
-        serialData.resize( bytes.size() + 8, 0 ); // the original reads byte [5] past a short tail
-        const char* byteArray = serialData.data();
-        int         rxLength  = (int)bytes.size();
-
-        while( rxLength )
-        {
-            int packetLength = byteArray[5] + 7;
-            if( ( rxLength >= packetLength ) && ( byteArray[0] == 'M' ) && ( byteArray[1] == 'T' ) )
-            {
-                while( packetLength )
-                {
-                    if( packetLength > 1 )
-                        appMgr.PushByteToRxFifo( byteArray[0] );
-                    byteArray++;
-                    packetLength--;
-                    rxLength--;
-                }
-            }
-            else
-                rxLength = 0;
-
-            if( appMgr.IsFrameRcvComplete() == TRUE )
-            {
-                appMgr.SetFrameRcvComplete( FALSE );
-                out.push_back( take( appMgr ) );
-            }
-            else
-                appMgr.ClearReceiver();
-        }
+        appReader.push( bytes.data(), bytes.size(), [&out]( Msg& m ) { out.push_back( m ); } );
+        if( pending ) *pending = appReader.pendingBytes();
         return out;
     }
 
@@ -319,42 +287,51 @@ int main()
     }
     {
         Bytes bare = encode( play );
-        expect( appRead( bare ).empty(), "frame without the trailing byte, alone: dropped (the reader wants size + 7 bytes)" );
+        const auto alone = appRead( bare );
+        expect( alone.size() == 1 && same( alone[0], play ), "frame without the trailing byte: taken (the trailer is skipped when it comes, not required)" );
         const auto got = appRead( cat( { encode( play ), encode( pad1 ) } ) );
-        expect( got.size() == 1 && same( got[0], play ), "two frames without trailing bytes: the first is taken, its 'trailing' byte is the second's 'M', the second is lost" );
+        expect( got.size() == 2 && same( got[0], play ) && same( got[1], pad1 ), "two frames without trailing bytes: both taken" );
     }
     {
         Bytes bad = wPlay;
         bad[bad.size() - 2] ^= 0x55;
-        expect( appRead( bad ).empty(), "bad CRC: dropped silently" );
+        expect( appRead( bad ).empty(), "bad CRC: dropped" );
         const auto got = appRead( wPad );
         expect( got.size() == 1 && same( got[0], pad1 ), "the next good frame after a bad CRC: dispatched" );
+        const auto both = appRead( cat( { bad, wPad } ) );
+        expect( both.size() == 1 && same( both[0], pad1 ), "a bad CRC and a good frame in one read: the good one dispatched" );
     }
     {
         const Bytes head( wPlay.begin(), wPlay.begin() + 7 ), tail( wPlay.begin() + 7, wPlay.end() );
-        const auto  a = appRead( head );
-        expect( a.empty(), "a frame split across two notifications, first part (7 of " + std::to_string( wPlay.size() ) + " bytes): read and dropped" );
+        size_t      left = 0;
+        const auto  a = appRead( head, &left );
+        expect( a.empty() && left == 7, "a frame split across two notifications, first part (7 of " + std::to_string( wPlay.size() ) + " bytes): kept" );
         const auto b = appRead( cat( { tail, wPad } ) );
-        expect( b.empty(), "the rest of it arrives with the next frame: the read does not start with 'M', both are dropped" );
-        const auto b2 = appRead( wPad );
-        expect( b2.size() == 1 && same( b2[0], pad1 ), "the frame after that: dispatched" );
-        bool       left = false;
-        const auto c    = appRead( Bytes( wPlay.begin(), wPlay.begin() + 5 ), &left );
-        expect( c.empty() && left, "fewer than 6 bytes available: left in the stream until more arrive" );
+        expect( b.size() == 2 && same( b[0], play ) && same( b[1], pad1 ), "the rest of it arrives with the next frame: both dispatched" );
+        const auto c = appRead( Bytes( wPlay.begin(), wPlay.begin() + 5 ), &left );
+        expect( c.empty() && left == 5, "fewer than 6 bytes: kept until more arrive" );
+        const auto d = appRead( Bytes( wPlay.begin() + 5, wPlay.end() ) );
+        expect( d.size() == 1 && same( d[0], play ), "and dispatched when they do" );
     }
     {
         const auto got = appRead( cat( { Bytes{ 0x00, 0xFF }, wPlay } ) );
-        expect( got.empty(), "garbage before a frame in the same read: the whole read is dropped" );
-        const auto got2 = appRead( cat( { wPlay, Bytes{ 0x00 }, wPad } ) );
-        expect( got2.size() == 1 && same( got2[0], play ), "garbage between two frames: the first is dispatched, the rest of the read dropped" );
+        expect( got.size() == 1 && same( got[0], play ), "garbage before a frame in the same read: skipped, the frame dispatched" );
+        const auto got2 = appRead( cat( { wPlay, Bytes{ 0x00, 0x4D, 0x41 }, wPad } ) );
+        expect( got2.size() == 2 && same( got2[0], play ) && same( got2[1], pad1 ), "garbage between two frames (with a stray 'M'): both dispatched" );
     }
     {
         const Msg empty = msg( CPktMgr::EN_PKT_TYPE_SYSTEM, DCC::EN_SYS_GET_SW_VER, {} );
-        expect( appRead( withTrailer( empty ) ).empty(), "frame with no payload: never completes" );
+        expect( appRead( withTrailer( empty ) ).empty(), "frame with no payload: dropped (no handler reads an empty message)" );
         const auto got = appRead( wPad );
-        expect( got.empty(), "the good frame after it: also lost (CPktMgr's partial-frame buffer is not cleared by ClearReceiver)" );
-        const auto got2 = appRead( wPad );
-        expect( got2.size() == 1 && same( got2[0], pad1 ), "the frame after that: dispatched again" );
+        expect( got.size() == 1 && same( got[0], pad1 ), "the good frame after it: dispatched" );
+        const auto got2 = appRead( cat( { withTrailer( empty ), wPad } ) );
+        expect( got2.size() == 1 && same( got2[0], pad1 ), "an empty frame and a good one in one read: the good one dispatched" );
+    }
+    {
+        Bytes big = { 'M', 'T', CPktMgr::EN_PKT_TYPE_PAD, 0, DCC::EN_PAD_STATE, (uint8_t)( BUFFER_RX_SIZE + 2 ) };
+        big.resize( big.size() + BUFFER_RX_SIZE + 2, 0x11 );
+        const auto got = appRead( cat( { big, wPad } ) );
+        expect( got.size() == 1 && same( got[0], pad1 ), "a payload larger than the " + std::to_string( BUFFER_RX_SIZE ) + "-byte receive FIFO: dropped without overrunning it; the next frame dispatched" );
     }
 
     std::printf( "\n%d checks, %d failed: %s\n", checks, failures, failures ? "FAIL" : "PASS" );
