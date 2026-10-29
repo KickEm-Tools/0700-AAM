@@ -220,18 +220,22 @@ macOS. Windows has no termios, so there the port never opens (a `#pragma message
 
 | Job | Runner | Builds |
 |---|---|---|
-| `Kick (macOS)` | `macos-14` | `Kick.app` |
+| `Kick (macOS)` | `macos-15` | `Kick.app` |
 | `Kick (Linux x86_64)` | `ubuntu-24.04` | `Kick` |
-| `KT_Kick (Linux arm64)` | `ubuntu-24.04-arm` | `Kick`, packaged as the `KT_Kick-linux-arm64` artifact |
+| `KT_Kick (Linux arm64)` | `ubuntu-24.04-arm`, in a `debian:bookworm` container | `Kick`, packaged as the `KT_Kick-linux-arm64` artifact |
 
-Every job also builds and runs the control-surface link tests (8.7) with `ctest`.
+Every job also builds and runs the control-surface link tests (8.7) with `ctest`. Linux jobs run
+at most one compiler per 2.5 GB of memory (`-O3 -flto`), and no more than one per CPU.
 
 The `KT_Kick-linux-arm64` artifact holds `KT_Kick-linux-arm64.tar.gz` (the binary as
 `KT_Kick` plus the `assets/`, `templates/` and `demos/` it reads from `/app` at run time, and
-`manifest.json`) and `manifest.json` next to it: git ref and commit, build date, compiler, runner
-image, JUCE version, and the shared libraries the binary needs. It is a native Ubuntu 24.04 arm64
-build, not a Buildroot SDK build. The CPM download cache is kept between runs, keyed on the CPM
-and JUCE versions and the JUCE patch.
+`manifest.json`) and `manifest.json` next to it: git ref and commit, build date, compiler, runner,
+container image, distribution, the glibc it was built with and the oldest it needs
+(`glibc_required`), JUCE version, and the shared libraries the binary needs. It is built in
+Debian 12 (glibc 2.36), not on the runner's Ubuntu 24.04 (glibc 2.39, whose binaries also need
+`libmvec.so.1`), so it starts on Debian 12 and later, such as the guest of KickEmulator's faithful
+mode. It is not a Buildroot SDK build. The CPM download cache is kept between runs, keyed on the
+CPM and JUCE versions and the JUCE patch.
 
 ## 7. Troubleshooting
 
