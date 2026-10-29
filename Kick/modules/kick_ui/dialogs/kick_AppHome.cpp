@@ -39,6 +39,27 @@ namespace kick_ui
 
     namespace
     {
+        // TAP TEMPO: the tempo of the last taps (up to four, i.e. three intervals) becomes the
+        // selected sequence's tempo (the master tempo when the sequence follows it). A pause longer
+        // than one beat at BPM::MIN starts a new count.
+        void tapTempo( mt::MTAudioInterface& ae )
+        {
+            static juce::Array<double> taps;
+            const auto                 now = juce::Time::getMillisecondCounterHiRes();
+            if( !taps.isEmpty() && ( now - taps.getLast() ) > ( 60000.0 / BPM::MIN ) )
+                taps.clearQuick();
+            taps.add( now );
+            while( taps.size() > 4 )
+                taps.remove( 0 );
+            if( taps.size() < 2 )
+                return;
+
+            const auto interval = ( taps.getLast() - taps.getFirst() ) / (double)( taps.size() - 1 );
+            const auto bpm      = juce::jlimit( (int)BPM::MIN, (int)BPM::MAX, juce::roundToInt( 60000.0 / interval ) );
+            ae.setSequenceBPM( ae.getSelectedSequence(), bpm );
+            juce::Logger::writeToLog( "TapTempo: " + juce::String( taps.size() ) + " taps, " + juce::String( interval, 1 ) + " ms apart -> " + juce::String( bpm ) + " BPM" );
+        }
+
         // RECORD / OVERDUB key LEDs follow the armed record mode.
         void showRecordLeds( mt::MTAudioInterface& ae )
         {
@@ -350,6 +371,52 @@ namespace kick_ui
         dynamic_cast<AppAssignSample*>( screens_[Screen::MenuAssignSample].get() )->startup();
     }
 
+    void KickHome::goBack()
+    {
+        // BACK does what the back arrow in the current screen's header does (most screens:
+        // return to the screen they were opened from; GRID, STEP SEQ, FX: return to MAIN).
+        // Screens without one (MAIN, the Projects screen) stay.
+        auto* scr = dynamic_cast<juce::Component*>( getScreen( getCurrentScreen() ) );
+        if( scr == nullptr || !scr->isShowing() )
+            return;
+        std::function<KickModeHeader*( juce::Component& )> findHeader = [&]( juce::Component& C ) -> KickModeHeader* {
+            for( auto* child : C.getChildren() )
+            {
+                if( !child->isVisible() )
+                    continue;
+                if( auto* h = dynamic_cast<KickModeHeader*>( child ); h && h->onBackButtonPressed )
+                    return h;
+                if( auto* h = findHeader( *child ) )
+                    return h;
+            }
+            return nullptr;
+        };
+        if( auto* header = findHeader( *scr ) )
+        {
+            juce::Logger::writeToLog( "BACK: header back of screen " + juce::String( (int)getCurrentScreen() ) );
+            header->onBackButtonPressed( true );
+        }
+    }
+
+    void KickHome::toggleMasterTempo()
+    {
+        // MASTER (SHIFT + TAP TEMPO): the selected sequence follows either its own tempo or the
+        // project's master tempo (the "Global" toggle of the sequence on the Main screen).
+        auto&      ae  = mt::getAudioInterface();
+        const auto seq = ae.getSelectedSequence();
+        auto       pSeq = ae.getSequenceData( seq );
+        if( pSeq == nullptr )
+            return;
+
+        const bool toMaster = !pSeq->isMasterBPM.get();
+        const auto bpm      = ae.setSequenceBPMToMaster( seq, toMaster );
+        contracts::DclSignals::sendCommandToDcl( toMaster ? contracts::DclContractsHelper::setLEDONMessage( contracts::DeviceControlContracts::EN_MASTER )
+                                                          : contracts::DclContractsHelper::setLEDOFFMessage( contracts::DeviceControlContracts::EN_MASTER ) );
+        const auto msg = juce::String( toMaster ? "Master Tempo" : "Sequence Tempo" ) + ": " + juce::String( bpm ) + " BPM";
+        juce::Logger::writeToLog( "Tempo source: " + pSeq->name.get() + " " + msg );
+        mt::utils::showNotification( msg );
+    }
+
     void KickHome::handleCommand( CPktMgr::HWMsg_t& f_HwMsg )
     {
         auto&        ae        = mt::getAudioInterface();
@@ -443,6 +510,8 @@ namespace kick_ui
                             contracts::DclContractsHelper::setHalfLevel( false );
                             break;
 
+                        case contracts::DeviceControlContracts::EN_BACK: goBack(); break;
+
                         case contracts::DeviceControlContracts::EN_LINK:
                             dynamic_cast<KnobEdit*>( screens_[Screen::MenuKnobEdit].get() )->knobLongPress();
                             break;
@@ -452,6 +521,7 @@ namespace kick_ui
 
                         // Transport keys with no per-screen handler (PLAY / STOP / PLAY START are
                         // handled by each screen; the LOOPER uses RECORD / OVERDUB for itself).
+                        case contracts::DeviceControlContracts::EN_TAP_TEMPO: tapTempo( ae ); break;
                         case contracts::DeviceControlContracts::EN_RECORD:
                         case contracts::DeviceControlContracts::EN_OVERDUB:
                             if( getCurrentScreen() != Screen::MenuLooper )
@@ -468,9 +538,15 @@ namespace kick_ui
                             }
                             break;
 
-                        // TC and ON/OFF (SHIFT + TC) had no handler.
+                        // TC, ON/OFF (SHIFT + TC) and MASTER (SHIFT + TAP TEMPO) had no handler.
                         case contracts::DeviceControlContracts::EN_TC: TimingCorrect::showWindow(); break;
                         case contracts::DeviceControlContracts::EN_ON_OFF: TimingCorrect::setEnabled( !TimingCorrect::isEnabled() ); break;
+                        case contracts::DeviceControlContracts::EN_MASTER: toggleMasterTempo(); break;
+                        case contracts::DeviceControlContracts::EN_AUTOMATION:
+                            // There is no automation engine in this firmware (the mode header's
+                            // Automation button has an empty onClick too): say so in the log only.
+                            juce::Logger::writeToLog( "AUTO: no automation engine in this firmware" );
+                            break;
 
                         default: break;
                     }
