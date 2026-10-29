@@ -68,6 +68,8 @@ namespace mt
         void setNextBarFlag( bool NextBarFlag );
 
     private:
+        int  startPlayback( int Seq, bool Resume );
+
         void onTick( unsigned int Ticks ) override;
         void onBeat();
         void onBar();

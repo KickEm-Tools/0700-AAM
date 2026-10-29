@@ -149,6 +149,7 @@ namespace mt
         juce::CriticalSection lock;
 
         std::atomic<bool>         soloMuted{ false };
+        std::atomic<bool>         playFromStart{ false }; // play(): the first tick also plays position 0
         std::atomic<unsigned int> lengthInTicks{ 0 };
         std::atomic<double>       lengthFactor{ 0 };
         //unsigned int              count;

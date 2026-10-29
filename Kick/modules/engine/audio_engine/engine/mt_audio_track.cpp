@@ -199,6 +199,7 @@ namespace mt
         prevTick              = 0;
         tickCtr               = 0;
         tickPos               = 0;
+        playFromStart         = true;
     }
 
     void MTTrack::resume()
@@ -286,7 +287,15 @@ namespace mt
     {
         //juce::Logger::writeToLog( "prevTick, " + juce::String( PrevTick ) + "PresentTick, " + juce::String(tick));
         juce::HashMap<int, MTNote*>* map = nullptr;
-        for( auto pos = PrevTick + 1; pos <= tick; pos++ )
+        // The clock's first tick after play() is 1 or more, never 0: include the starting position,
+        // or the notes on the first downbeat are skipped until the sequence loops.
+        auto first = PrevTick + 1;
+        if( playFromStart )
+        {
+            playFromStart = false;
+            first         = PrevTick;
+        }
+        for( auto pos = first; pos <= tick; pos++ )
         {
             int posOnTrack = pos % lengthInTicks.load();
             map            = getNotesAtPos( posOnTrack );
@@ -336,6 +345,10 @@ namespace mt
         if( pProgram->isAudio() )
             return;
 
+        if( Tick < prevTick ) // clock restarted (play() while a tick was in flight)
+            prevTick = 0;
+        if( playFromStart.load() && Tick > 96 ) // a tick of the previous clock run, after play()
+            return;
         unsigned int diffTick = Tick - prevTick;
 
         tickCtr += diffTick;

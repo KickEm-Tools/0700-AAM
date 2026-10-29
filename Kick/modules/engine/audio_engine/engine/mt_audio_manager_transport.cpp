@@ -132,6 +132,11 @@ namespace mt
 
     int MTAudioTransportManager::play( int Seq )
     {
+        return startPlayback( Seq, isPaused() );
+    }
+
+    int MTAudioTransportManager::startPlayback( int Seq, bool Resume )
+    {
         int retVal = -1;
 
         if( auto s = getSequence( Seq ) )
@@ -139,11 +144,12 @@ namespace mt
             if( playingSequence && ( s != playingSequence ) )
             {
                 playingSequence->stop();
+                Resume = false; // another sequence: there is no paused position to resume
             }
             playingSequence = s;
             //playingSequence->updatePlayhead(); // redundant call as playingSequence->play() updates the playhead.
 
-            if( isPaused() )
+            if( Resume )
             {
                 playingSequence->resume();
             }
@@ -194,8 +200,10 @@ namespace mt
 
     int MTAudioTransportManager::play( int Seq, bool FromBeginning, bool Now )
     {
+        // PLAY START plays from the top, also after STOP (which pauses); PLAY resumes a paused
+        // sequence where it stopped. Both used to resume after STOP.
         if( Now )
-            return FromBeginning ? play( Seq ) : resume( Seq );
+            return FromBeginning ? startPlayback( Seq, false ) : resume( Seq );
         else
         {
             if( auto s = getSequence( Seq ) )
