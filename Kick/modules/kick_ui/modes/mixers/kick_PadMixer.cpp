@@ -594,6 +594,7 @@ namespace kick_ui
         auto& rowComp       = tableView->getRowComponents();
         auto  totalRows     = tableView->getNumRows();
         auto  comp1         = dynamic_cast<PadMixerDisplay*>( rowComp[0] );
+        if( comp1 == nullptr ) return; // No rows: no program, or a program the pad mixer does not apply to.
         auto  elementBounds = comp1->getElementBounds( ( knob - 1 ) % 4 + 1 );
         auto  rowList       = tableView->getRowNumbers( 4, ( ( knob - 1 ) / 4 ) + 1, elementBounds.getX(), elementBounds.getWidth(), 50 );
 
@@ -601,8 +602,10 @@ namespace kick_ui
 
         for( auto i = 0; i < rowList.size(); i++ )
         {
-            int rowIndex = rowList[i] - 1;
-            if( rowIndex < totalRows )
+            // getRowNumbers returns 0-based rows (as for the track mixers); the "- 1" that was here
+            // made P1-P4 address row -1 (nothing) and P5-P8 the first pad.
+            int rowIndex = rowList[i];
+            if( rowIndex >= 0 && rowIndex < totalRows )
             {
                 auto comp = dynamic_cast<PadMixerDisplay*>( rowComp[rowIndex] );
                 entry.push_back( comp );

@@ -41,7 +41,8 @@ namespace mt
             _sampler = pRecorder.get();
             _engine.addMeter( _engine.createObject( std::move( pRecorder ) ) );
             _sampler->initAudioRouting();
-            _sampler->connectInputTo( AudIO::DawRouting::getDefaultStereoInID() );
+            if( !_sampler->connectInputTo( AudIO::DawRouting::getDefaultStereoInID() ) )
+                juce::Logger::writeToLog( "MTAudioRecorderManager: the sampler could not be patched to the input (object id " + juce::String( _sampler->getId() ) + ")" );
             _sampler->setEnable( true );
             assert( _sampler != nullptr );
         }
@@ -51,7 +52,8 @@ namespace mt
             _looper = pRecorder.get();
             _engine.addMeter( _engine.createObject( std::move( pRecorder ) ) );
             _looper->initAudioRouting();
-            _looper->connectInputTo( AudIO::DawRouting::getDefaultStereoInID() );
+            if( !_looper->connectInputTo( AudIO::DawRouting::getDefaultStereoInID() ) )
+                juce::Logger::writeToLog( "MTAudioRecorderManager: the looper could not be patched to the input (object id " + juce::String( _looper->getId() ) + ")" );
             _looper->setEnable( true );
             assert( _looper != nullptr );
         }

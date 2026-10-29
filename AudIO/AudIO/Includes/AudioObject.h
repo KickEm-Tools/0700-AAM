@@ -1,12 +1,18 @@
 #pragma once
 
+#include <atomic>
 #include "IProcessable.h"
 #include "RampedParameter.h"
 #include "ObjectFactory.h"
 
 namespace AudIO
 {
-    static uint32_t audioObjectId{ 1 };
+    // One id counter for the whole program. It used to be `static`, i.e. one counter per
+    // translation unit: Kick builds AudIO, AudIO_juce and its own engine as separate JUCE
+    // module TUs, so objects created in different TUs got the same ids and Design refused to
+    // insert the later one (observed: the sampler's mt::SampleRecorder got id 2, already taken
+    // by an engine bus, and was never processed).
+    inline std::atomic<uint32_t> audioObjectId{ 1 };
 
     class Object : public IProcessable
     {

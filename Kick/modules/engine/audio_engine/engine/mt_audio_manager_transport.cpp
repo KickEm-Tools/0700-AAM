@@ -132,27 +132,39 @@ namespace mt
 
     int MTAudioTransportManager::play( int Seq )
     {
+        return startPlayback( Seq, isPaused() );
+    }
+
+    int MTAudioTransportManager::startPlayback( int Seq, bool Resume )
+    {
         int retVal = -1;
 
         if( auto s = getSequence( Seq ) )
         {
             if( playingSequence && ( s != playingSequence ) )
             {
+                endTake();
                 playingSequence->stop();
+                Resume = false; // another sequence: there is no paused position to resume
             }
             playingSequence = s;
             //playingSequence->updatePlayhead(); // redundant call as playingSequence->play() updates the playhead.
 
-            if( isPaused() )
+            if( Resume )
             {
                 playingSequence->resume();
             }
             else
             {
+                endTake(); // a running take ends where the old pass stops
                 playingSequence->play();
             }
 
             setTransportState( TransportState::Playing );
+
+            // RECORD / OVERDUB armed while stopped: the take starts with playback.
+            if( recordArmed.load() && !isTakeRunning() )
+                beginTake();
             retVal = 0;
         }
 
@@ -166,6 +178,10 @@ namespace mt
 
     int MTAudioTransportManager::pause()
     {
+        // STOP ends a recording take and disarms RECORD / OVERDUB.
+        endTake();
+        recordArmed.store( false );
+
         midiClock.stop();
         setTransportState( TransportState::Paused );
 
@@ -180,6 +196,9 @@ namespace mt
 
     int MTAudioTransportManager::stop()
     {
+        endTake();
+        recordArmed.store( false );
+
         midiClock.stop();
         setTransportState( TransportState::Stopped );
 
@@ -194,8 +213,10 @@ namespace mt
 
     int MTAudioTransportManager::play( int Seq, bool FromBeginning, bool Now )
     {
+        // PLAY START plays from the top, also after STOP (which pauses); PLAY resumes a paused
+        // sequence where it stopped. Both used to resume after STOP.
         if( Now )
-            return FromBeginning ? play( Seq ) : resume( Seq );
+            return FromBeginning ? startPlayback( Seq, false ) : resume( Seq );
         else
         {
             if( auto s = getSequence( Seq ) )
@@ -206,6 +227,58 @@ namespace mt
             }
         }
         return -1;
+    }
+
+    ///
+    /// Note recording (RECORD / OVERDUB keys).
+    ///
+    void MTAudioTransportManager::setRecordMode( bool Record, bool Overdub )
+    {
+        const bool sameMode = recordArmed.load() && ( recordOverdub.load() == Overdub );
+        endTake();
+        if( !Record || sameMode )
+        {
+            recordArmed.store( false );
+            juce::Logger::writeToLog( "Record: disarmed" );
+        }
+        else
+        {
+            recordOverdub.store( Overdub );
+            recordArmed.store( true );
+            juce::Logger::writeToLog( juce::String( "Record: armed for " ) + ( Overdub ? "OVERDUB" : "RECORD" ) );
+            if( isPlaying() )
+                beginTake(); // punch in
+        }
+
+        if( auto pSeq = getSequence() )
+            pSeq->setRecordState( isTakeRunning() ? RecordState::Recording : ( recordArmed.load() ? RecordState::Armed : RecordState::NotArmed ) );
+    }
+
+    void MTAudioTransportManager::beginTake()
+    {
+        if( !playingSequence )
+            return;
+        auto pTrack = getTrack();
+        if( !pTrack || 0 == playingSequence->getNumTracks() || ( playingSequence != getSequence() ) )
+            return;
+
+        pTrack->startRecording( !recordOverdub.load() );
+        takeTrack.store( pTrack );
+        playingSequence->setRecordState( RecordState::Recording );
+    }
+
+    void MTAudioTransportManager::endTake()
+    {
+        if( auto pTrack = takeTrack.exchange( nullptr ) )
+            pTrack->stopRecording();
+        if( playingSequence )
+            playingSequence->setRecordState( recordArmed.load() ? RecordState::Armed : RecordState::NotArmed );
+    }
+
+    void MTAudioTransportManager::recordLiveMidi( MTTrack* Track, const juce::MidiMessage& Msg )
+    {
+        if( Track && Track == takeTrack.load() )
+            Track->recordMidiMessage( Msg );
     }
 
     void MTAudioTransportManager::seek( int posInTicks )
@@ -244,13 +317,18 @@ namespace mt
             {
                 ++stepIndex;
                 resetSong();
-                if( playQueue.front().isEnabled )
-                {
-                    setSelectedSequence( playQueue.front().seq );
-                    play( playQueue.front().seq );
-                }
+                const auto step = playQueue.front();
                 playQueue.pop();
-                signals::onSongSequencePlay( playingSequence->getIndex(), -1, stepIndex );
+                // Sequence changes run on the tick thread (see defer()).
+                defer( [this, step]() {
+                    if( step.isEnabled )
+                    {
+                        setSelectedSequence( step.seq );
+                        play( step.seq );
+                    }
+                    if( playingSequence )
+                        signals::onSongSequencePlay( playingSequence->getIndex(), -1, stepIndex );
+                } );
             }
             else if( ( nextSequenceUpdateTicks <= playTime ) && ( nextSequenceUpdateTicks >= 0 ) )
             {
@@ -274,11 +352,22 @@ namespace mt
             auto lengthInTicks = length * playingSequence->getTicksPerBar();
             if( curTick % lengthInTicks == 0 )
             {
-                play( nextSequenceToPlay );
+                const int next     = nextSequenceToPlay;
                 nextSequenceToPlay = -1;
-                signals::onNextSequencePlay( playingSequence->getIndex() );
+                defer( [this, next]() {
+                    play( next );
+                    if( playingSequence )
+                        signals::onNextSequencePlay( playingSequence->getIndex() );
+                } );
             }
         }
+    }
+
+    void MTAudioTransportManager::defer( std::function<void()> Action )
+    {
+        const juce::SpinLock::ScopedLockType sl( deferredLock );
+        deferred.push_back( std::move( Action ) );
+        onTickEvent.signal();
     }
 
     void MTAudioTransportManager::processTick()
@@ -286,6 +375,28 @@ namespace mt
         while( !stopTickProcessing )
         {
             onTickEvent.wait( 1 );
+
+            // Sequence changes requested by the MIDI clock thread (NEXT SEQ at the loop end, song
+            // steps) run here, between two ticks: run from the clock thread, play() stopped the
+            // old sequence's tracks (clearing their queued notes) while this thread was inside
+            // MTTrack::onTick iterating them, an intermittent SIGSEGV. The tick that triggered the
+            // change belongs to the old clock run and is dropped.
+            {
+                std::vector<std::function<void()>> actions;
+                {
+                    const juce::SpinLock::ScopedLockType sl( deferredLock );
+                    actions.swap( deferred );
+                }
+                if( !actions.empty() )
+                {
+                    const ScopedAtomicResetter<bool> resetter( threadIsProcessingTick, false, true );
+                    for( auto& a : actions )
+                        a();
+                    prevTick.store( curTick );
+                    continue;
+                }
+            }
+
             if( prevTick == curTick )
                 continue;
             try

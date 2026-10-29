@@ -289,6 +289,14 @@ namespace mt
         // Transport API's
         int  setSequencePlay( int Sequence, bool FromBeginning, bool Now );
         int  setSequencePause();
+
+        // Note recording into the selected track (RECORD / OVERDUB keys); see
+        // MTAudioTransportManager::setRecordMode.
+        void setSequenceRecord( bool Record, bool Overdub );
+        bool isSequenceRecordArmed();
+        bool isSequenceRecordOverdub();
+        bool isSequenceRecording();
+        void setRecordTimingCorrect( std::function<int( int StartTick )> Correct );
         int  setSequenceStop();
         bool isSequencePlaying();
 
