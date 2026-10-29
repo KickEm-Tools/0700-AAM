@@ -107,7 +107,7 @@ namespace kick_ui
         };
         date_YYYY.onValueChanged = [&]( int Value ) {
             DBG( "date_YYYY " << Value );
-            int days = mt::HwPref::getHwPref().getDaysInMonth( Value, date_YYYY.getValue() );
+            int days = mt::HwPref::getHwPref().getDaysInMonth( date_MM.getValue(), Value );
             date_DD.setRange( 1, days, 1 );
             setDate();
         };
