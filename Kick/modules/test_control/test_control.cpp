@@ -31,3 +31,4 @@
 #include "test_control.h"
 
 #include "source/kick_TestControl.cpp"
+#include "source/kick_ScreenMirror.cpp"

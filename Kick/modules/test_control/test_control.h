@@ -10,7 +10,7 @@
   vendor:             MUSIC Tribe
   version:            0.1.0
   name:               Test control
-  description:        Opt-in, file-driven test channel for the app's screen (KICK_TEST_CONTROL)
+  description:        Opt-in test hooks for the app's screen: a file-driven channel (KICK_TEST_CONTROL) and a screen mirror (KICK_SCREEN_MIRROR)
   website:
   license:            AGPLv3
   dependencies:       juce_gui_basics
@@ -48,5 +48,6 @@
 
     #include "source/kick_FocusFallback.h"
     #include "source/kick_TestControl.h"
+    #include "source/kick_ScreenMirror.h"
 
 #endif

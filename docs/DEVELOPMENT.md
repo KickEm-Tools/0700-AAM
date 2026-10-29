@@ -527,6 +527,7 @@ All of them are unset on a unit (`ktkick.service` sets none of them).
 |---|---|---|---|
 | `KICK_SERIAL_DEVICE=<absolute path>` | Opens that device for the control-surface link instead of `/dev/ttymxc0`, with the same settings (230400 8N1) and handshake: a USB serial adapter, or the pseudo-terminal of an emulated panel | `modules/input_events` (from `feature/serialport`) | `/dev/ttymxc0`, as always |
 | `KICK_TEST_CONTROL=<file>` | Starts the test-control module (9.3): the app polls `<file>` for commands that touch the screen, list or render it, and read the transport | `modules/test_control`, created by `apps/kick/Main.cpp` | Not created: nothing is polled or logged, focus is JUCE's alone |
+| `KICK_SCREEN_MIRROR=<unix socket path>` | The main window gets no native window: a headless peer renders it (popups and bubbles included) and serves it over RFB ("VNC") on that socket, and the viewer's pointer becomes touches (9.5). For an emulator that shows the screen inside its panel, and for checks with the computer's screen locked | `modules/test_control` (`kick_ScreenMirror.*`), used by `HomeWindow::createNewPeer` in `apps/kick/Main.cpp` | Not created: the window is the normal native one, created as before; no socket, nothing logged |
 | `KICK_AUDIO_PROBE=<file.wav>` | `mt::AudioDevice` writes the engine's master output to that WAV (32-bit float) and logs `AudioProbe: t=<n>s peak=<x>dBFS rms=<y>dBFS` once per second of audio (`-120.0dBFS` is silence). The audio thread only copies into a lock-free FIFO; a background thread writes | `AudIO/AudIO_juce/source/mt_AudioDeviceProbe.*` | No probe object; the audio callback is unchanged |
 | `KICK_AUDIO_INPUT=silence\|device\|tone[:hz]\|pulse[:ms]\|<file>` | Replaces the device input on every channel with digital silence, a -12 dBFS sine (1 kHz default), 50 ms 1 kHz bursts at -6 dBFS every 500 ms (or `<ms>`), or a looped audio file; `device` (or unset) keeps the real input. Logged as `TestInput: ...` | same | The real input |
 | `KICK_LOG_NOTES=1` | The sequencer logs every note it plays: `Note: track '<name>' tick <t> pos <p> note <n> velocity <v> id <id>`. Read once | `engine/audio_engine/engine/mt_audio_track.cpp` | Nothing logged |
@@ -581,6 +582,7 @@ shows up as a timeout.
 | Command | What it does |
 |---|---|
 | `tap X Y` | Touches pixel (X, Y) of the 1024x600 screen (the main window) |
+| `touch X Y` | The same as a real touch: a button-down and, 80 ms later, a button-up handed to the window's `ComponentPeer`, so JUCE dispatches it to the component, its mouse listeners and its parents' (list rows). With a native window it needs the window to be the topmost one there (it floats the window above the others for the touch, and refuses while the screen is locked); with the screen mirror (9.5) it always works |
 | `click NAME` | Touches the centre of the showing component whose title (or name) is NAME, popups first: Preferences tabs `Info`, `Hardware`, `CV`, `Ethernet`, `WiFi`, buttons such as `Settings`, `Resources`, `Firmware Update` |
 | `clickat NAME FX FY` | Touches NAME at fraction (FX, FY) of its size, for controls with untitled parts |
 | `list [FILTER]` | Logs `TestControl: item <type> <name> <x y w h> screen\|popup` for every showing, titled component (bounds in screen pixels, usable with `tap`) |
@@ -617,3 +619,45 @@ Two generic changes make the screen behave on a desktop as on the unit, with no 
 - List rows (`KickTableView`) are hit-tested in the list's own coordinates, and the Q-Link row
   maths measures the list from the top-level component rather than the desktop. On the unit both
   give the same numbers.
+
+### 9.5 The screen mirror
+
+`KICK_SCREEN_MIRROR=<unix socket path>` lets another program show the app's screen and touch it,
+with nothing of the app on the computer's desktop. An emulator uses it to draw the screen inside
+its front panel, in the display cut-out. Without the variable nothing changes: `HomeWindow` is
+created and put on the desktop exactly as before, and none of this code runs.
+
+With it, `HomeWindow::createNewPeer` returns a headless `ComponentPeer`
+(`testcontrol::ScreenMirror`, `modules/test_control/source/kick_ScreenMirror.*`) instead of a
+native window. JUCE neither knows nor cares: it paints into that peer and dispatches its input as
+it does for a native window.
+
+- **Painting.** `repaint()` on the window or anything on it (popups, the spinner and bubbles are
+  its children, 9.4) reaches the peer, which collects the areas and renders them with JUCE's
+  software renderer, the renderer the unit uses, at most 30 times a second. It paints only while a
+  viewer is connected; a new viewer first gets the whole screen.
+- **Serving.** The peer runs a minimal RFB 3.8 server (RFC 6143) on the unix socket: security
+  type None, raw encoding, only the rectangles that changed, one viewer at a time (a new one
+  replaces the old). The socket file is created with mode 0600 and removed on exit; there is no
+  network listener. Viewers may ask for any 32-bit true-colour pixel format.
+- **Touches.** The viewer's pointer events become mouse events on the peer, through
+  `ComponentPeer::handleMouseEvent` as a native window's are: button 1 down, moves while it is
+  down, button 1 up. JUCE then dispatches them to the component under the point, its mouse
+  listeners and its parents' listeners (list rows, drags, sliders), with its own focus handling,
+  as for a finger on the unit's screen. The peer reports itself focused (it is the only window),
+  so JUCE gives keyboard focus to touched controls. Keyboard events from the viewer are ignored:
+  keys come from the control surface.
+- **No desktop dependency.** Nothing asks the window server anything, so painting, touches, the
+  test-control module's `touch` and `shot` work with the computer's screen locked. On macOS the
+  app's Dock icon is hidden. On Linux the window is not made the kiosk component (there is no
+  display to fill).
+
+Log lines: `ScreenMirror: serving the screen on <path> (...)`, `viewer connected (1024x600)`,
+`touch down <x> <y> on <component>` / `touch up ...`, and `viewer gone (<why>) after <n> s:
+<updates> updates (<n>/s), <n> MB`. If the socket cannot be created (path too long, a
+non-socket file in the way) it logs `ScreenMirror: cannot serve the screen on ...; using a normal
+window` and the app runs with its native window. Not available on Windows.
+
+Any RFB viewer that can connect to a unix socket and accepts no authentication can be the
+viewer; the emulator's panel is one (`kickem-panel --screen embedded --screen-source
+unix:<path>`, `KickEm-Tools/KickEmulator`).
