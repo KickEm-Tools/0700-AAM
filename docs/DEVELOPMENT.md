@@ -302,15 +302,17 @@ Both directions use the same frame, built by `CPktMgr::BuildAndTransmitPacket`:
 - **CRC.** CRC-8 with polynomial 0x31 (x^8 + x^5 + x^4 + 1), initial value 0xFF, MSB first, no
   reflection, no final XOR (the CRC-8/NRSC-5 parameters; the check value of `"123456789"` is
   0xF7). It covers every byte from `'M'` to the last payload byte.
-- **The trailing byte.** The app's reader takes `size + 7` bytes per frame, one more than the
-  frame, and ignores the last one. A surface must therefore send one byte after the CRC.
+- **The trailing byte.** The surface sends one byte after the CRC; the app's reader skips it
+  (8.4). Before `fix/serial-robustness` the reader took `size + 7` bytes per frame and required
+  it.
   `Kick/tests/fake_mcu.py` sends `'\n'`: the line `f_txData.push_back('\n')`, commented out at the
   end of `BuildAndTransmitPacket`, suggests this is what the microcontroller does. The app's own
   frames have no trailing byte.
 - **Example.** `4D 54 00 00 04 02 01 A0 0A` is SYSTEM, request, `EN_SYS_CHECK_COMM_STATUS`,
   payload `[1]`, CRC 0xA0, trailing `'\n'`.
 - **Size limit.** The app's receive FIFO is 20 bytes (`BUFFER_RX_SIZE`, `ComConfig.hpp`) and
-  `PushByteToRxFifo` does not check bounds. A surface-to-app payload must not exceed 20 bytes.
+  `PushByteToRxFifo` does not check bounds, so the reader drops a frame whose payload is larger
+  (8.4). A surface-to-app payload must not exceed 20 bytes.
   Every packet the app handles has at most 4.
 
 **Packets the app handles (surface to app):**
@@ -391,53 +393,50 @@ Timing and retries:
 ### 8.4 What the reader does with imperfect input
 
 The reader is `HwSerialData::changeListenerCallback`. It runs on the message thread, once per
-change notification from the serial input stream:
+change notification from the serial input stream, reads everything buffered and hands it to
+`Controls::SurfaceFrameReader` (`modules/input_events/source/kick_SurfaceFrameReader.h`):
 
-1. **Fewer than 6 bytes buffered:** it returns and leaves them in the stream.
-2. **Otherwise it reads everything buffered** and walks it frame by frame. Each frame must start
-   with `'M'` `'T'` and be complete (`size + 7` bytes). At the first one that is not, it stops,
-   and **the rest of that read is discarded**.
-3. **Complete frames** go through `CPktMgr::PushByteToRxFifo`, all but the trailing byte.
-   - CRC matches: the frame is dispatched (requests only).
-   - CRC does not match: the frame is dropped silently. `Data Frame Error` is logged only in
-     builds with `DEBUG_PRINTS`.
+1. **Bytes are kept between notifications**, so a frame that arrives in two pieces is put back
+   together.
+2. **Anything that is not `'M'` `'T'` is skipped** up to the next `'M'` `'T'`. The one trailing
+   byte after each frame is skipped silently; other skipped bytes are logged
+   (`InputEvents: skipped 10 byte(s) before a frame: 00 FF ...`). The trailing byte is not
+   required: a frame without it is taken as well.
+3. **Each frame goes through `CPktMgr::PushByteToRxFifo` whole, from its `'M'`**, so CPktMgr's
+   partial-frame buffer (a function-level `static`) is always emptied by its CRC state.
+   - CRC matches: the frame is dispatched (requests only; responses are ignored).
+   - CRC does not match: the frame is dropped (`InputEvents: dropped a frame with a bad CRC`),
+     up to an `'M'` `'T'` inside it, where a good frame may start.
+4. **Frames the app cannot take are dropped:** no payload (size 1; no handler expects an empty
+   message, and `PushByteToRxFifo` never completes one), a size of 0, and a payload larger than
+   the 20-byte receive FIFO, which used to overrun it.
 
-Consequences, each checked by `kick_protocol_roundtrip`:
+Checked by `kick_protocol_roundtrip` (two frames in one read, frames with and without the
+trailing byte, a bad CRC alone and before a good frame, a frame split across two reads, fewer
+than 6 bytes, garbage before and between frames, an empty payload, an oversized payload) and,
+over a pseudo-terminal against the whole app, by the emulator's `checks/serial_faults`
+(KickEm-Tools/KickEmulator).
 
-- **Two frames in one read:** both dispatched.
-- **No trailing byte:** a lone frame is too short and is dropped. In two back-to-back frames the
-  first is taken, and its "trailing byte" is the second frame's `'M'`, so the second is lost.
-- **Bad CRC:** that frame is lost, and the next good frame is fine.
-- **A frame split across two notifications** (6 or more bytes, but not all of it): the first part
-  is read and dropped. The rest then starts the next read without `'M'`, so the frame after it is
-  lost too. A pty usually delivers a write in one piece; a UART at 230400 baud may not.
-- **Garbage before a frame,** in the same read: the whole read is dropped. Garbage between frames
-  drops everything after it in that read.
-- **A frame with an empty payload** (size 1) never completes. The bytes it left in `CPktMgr`'s
-  partial-frame buffer are not cleared by `ClearReceiver()`, so the next good frame fails its CRC
-  as well. That buffer is a function-level `static`, shared by every `CPktMgr` in the process.
-- **A payload over 20 bytes** writes past the receive FIFO.
-- **A stream that grows during the callback.** The reader asks the stream for its length three
-  times: to size its buffer, to record the length, and in the `read()` call itself. A stream that
-  grew in between would make `read()` write past the buffer. `juce_serialport` prevents this:
-  while a listener runs, the length it sees is fixed (8.6).
+Until `fix/serial-robustness`, a read that did not start with a complete frame was dropped whole:
+a frame split across two reads was lost with the frame after it, garbage before a frame lost it,
+garbage between frames lost everything after it in that read, and an empty payload spoiled the
+next frame's CRC.
 
-### 8.5 When `reconnect()` runs
+### 8.5 Hang-ups and `reconnect()`
 
-- **The only trigger.** `Controls::InputEvents::reconnect()` runs only when the app is asked to
-  send SYSTEM `EN_SYS_RECONNECT` (`DclContractsHelper::reconnectMessage()`). In this tree only
-  `apps/kick_device_control_test` sends it. Nothing calls it on a read error, a hang-up or a
-  timeout.
+- **A hang-up** (a USB adapter unplugged, the other end of a pseudo-terminal closed): the serial
+  port's reader logs `SerialPort read: <path>: end of file; reader stopped` and stops. From the
+  first successful open on, a 1 s timer in `HwSerialData` checks that the reader is still
+  running; once it is not, the app logs `InputEvents: the control surface port hung up; reopening
+  it` and reopens the port once a second until it is back (`InputEvents: the control surface port
+  is open again`). Reopening sends the handshake's first frame again, so the surface answers as at
+  start-up. `/dev/ttymxc0` on the unit does not hang up, so there the timer only ever checks.
+- **`reconnect()`** (`close()` then `connect()`) runs when the app is asked to send SYSTEM
+  `EN_SYS_RECONNECT` (`DclContractsHelper::reconnectMessage()`; in this tree only
+  `apps/kick_device_control_test` sends it). `close()` stops the send thread; `connect()` now starts
+  it again (before `fix/serial-robustness` it did not, and every frame after a reconnect was queued
+  and never sent).
 - **Shutdown.** `EN_SYS_SHUTDOWN` calls `shutdown()`, which destroys the link.
-- **What it does.** `HwSerialData::reconnect()` is `close()` then `connect()`:
-  - `close()` closes the port and stops the send thread;
-  - `connect()` does not start the send thread again.
-
-  So after a reconnect, frames are queued but never sent, including the new step 1 of the
-  handshake. This is to be confirmed and fixed with the fault tests (`/goal-serial` phase 5).
-- **Hang-up.** When the other end goes away (a pty master closes, a USB adapter is unplugged), the
-  serial port's reader logs `SerialPort read: <path>: end of file; reader stopped` and stops. The
-  app keeps the port open and receives nothing more until something calls `reconnect()`.
 
 ### 8.6 `juce_serialport`
 
