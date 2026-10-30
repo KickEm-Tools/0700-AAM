@@ -237,6 +237,21 @@ Debian 12 (glibc 2.36), not on the runner's Ubuntu 24.04 (glibc 2.39, whose bina
 mode. It is not a Buildroot SDK build. The CPM download cache is kept between runs, keyed on the
 CPM and JUCE versions and the JUCE patch.
 
+`.github/workflows/emulator.yml` runs the firmware against
+[KickEmulator](https://github.com/KickEm-Tools/KickEmulator), through its reusable workflow
+`test-firmware.yml` (pinned to a commit of the emulator):
+
+| Job | When | Runner | What |
+|---|---|---|---|
+| `fast` | every pull request, pushes to `main`, on request | `macos-15` | Builds the desktop `Kick` app and the emulated panel, connects them over a pty, runs `checks/smoke`: PUSH loads the Starter Kit, PLAY four bars, STOP; LED and pad-colour packets over the wire, sound in the audio probe (`KICK_AUDIO_PROBE`), no clipping, silence after STOP |
+| `vm` | nightly, on request | `ubuntu-24.04-arm` | Builds `KT_Kick` for Linux arm64 (Debian 12), boots it in a QEMU arm64 VM through the unit's own `ktkick.service`, with the panel on the VM's UART, and runs the same smoke test. Hosted arm64 runners have no KVM, so QEMU emulates (TCG) |
+
+Each job uploads its evidence (app log, panel log with every frame, probe WAV, screenshots, check
+output, build log) as an artifact and writes a job summary that says what the mode cannot tell
+you. Fast mode says nothing about the device's Linux build; faithful mode says nothing about
+latency, CPU headroom, the codec, the GPU driver or the panel microcontroller's own firmware.
+Run other checks or modes with **Run workflow** (`workflow_dispatch`: mode, checks, runner).
+
 ## 7. Troubleshooting
 
 - **"Failed to build juceaide ... CGWindowListCreateImage is unavailable"** (macOS): the configure
